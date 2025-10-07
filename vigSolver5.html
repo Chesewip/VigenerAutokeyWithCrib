@@ -1398,8 +1398,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
         bestKey = i;
       }
     }
-    if (bestLetter !== -1) return {type:'letter', idx:bestLetter};
-    if (bestKey !== -1) return {type:'key', idx:bestKey};
+    if (bestKey !== -1 && bestKeyScore>0) return {type:'key', idx:bestKey};
     return null;
   }
 
@@ -2123,8 +2122,7 @@ try{
                 bestKey = i;
               }
             }
-            if (bestLetter !== -1) return {type:'letter', idx:bestLetter};
-            if (bestKey !== -1) return {type:'key', idx:bestKey};
+            if (bestKey !== -1 && bestKeyScore>0) return {type:'key', idx:bestKey};
             return null;
           }
 
