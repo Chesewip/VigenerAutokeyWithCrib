@@ -1802,6 +1802,10 @@ async function runUnknownAlphabetInline(){
           const sample = coverage.missingFeed.slice(0,5).map(({step, dependsOn})=>`(${step}<-${dependsOn})`).join(' ');
           if (sample) detailLines.push(`  uncovered autokey links: ${sample}${coverage.missingFeed.length>5?' …':''}`);
         }
+        const byR = Array.from({length:kLen},()=>[]); cons.forEach(c=>byR[c.r].push(c));
+        let cover = byR.filter(g=>g.length>0).length;
+        const contrad = false;
+        debugLines.push(`m=${kLen}: constraints=${cons.length}, residuesHit=${cover}/${kLen}, contradictions=${contrad}`);
       }
       if (detailLines.length){
         pre.textContent = detailLines.join('\n');
