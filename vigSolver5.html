@@ -2410,6 +2410,9 @@ try{
           const maxK = msg.maxK|0;
           const op = msg.op || 'vigenere';
           const maxResults = msg.maxResults|0;
+          const quickTrials = Number.isFinite(msg.quickTrials) ? Math.max(0, msg.quickTrials|0) : 30;
+          const trialDepth = Number.isFinite(msg.trialDepth) ? Math.max(0, msg.trialDepth|0) : 3;
+          const quickOpts = { propagateOnly: true, quickTrials, trialDepth };
           const cribPairs = Array.isArray(msg.cribPairs) ? msg.cribPairs : [];
           const cribMap = {};
           for (const pair of cribPairs){
@@ -2461,7 +2464,20 @@ try{
                 }
               }
               if (!conflict){
+                const plausible = [];
                 for (let kk=minKVal; kk<=maxKVal && !__cancelled; kk++){
+                  try {
+                    const quick = (op === 'vig_custom_alpha')
+                      ? solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickOpts)
+                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, quickOpts);
+                    if (quick){
+                      plausible.push(kk);
+                    }
+                  } catch(e){}
+                }
+                if (!plausible.length) continue;
+                for (const kk of plausible){
+                  if (__cancelled) break;
                   try {
                     const sol = (op === 'vig_custom_alpha')
                       ? solveVigUnknownAlphabet(letters, candidateCribMap, kk)
