@@ -57,6 +57,7 @@
         <option value="vig_sub">Vigenère + unknown substitution (pre‑sub on plaintext)</option>
         <option value="vig_sub_post">Vigenère + unknown substitution (post‑sub on ciphertext)</option>
         <option value="vig_custom_alpha">Vigenère with unknown alphabet (shared custom order)</option>
+        <option value="autokey_custom_alpha">Autokey with unknown alphabet (shared custom order)</option>
       </select>
       <button id="render">Render grid</button>
       <button id="test">Test cribs</button>
@@ -784,8 +785,8 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
     
     const cipherSeg = cLetters.slice(startPos, endPos + 1).join('');
     const plainSeg = word;
-    // Special fast path for unknown alphabet mode: propagation-only check across key lengths.
-    if (op === 'vig_custom_alpha'){
+    // Special fast path for unknown alphabet modes: propagation-only check across key lengths.
+    if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
       const candidateCribMap = Object.assign({}, cribMap);
       for (let t = 0; t < word.length; t++) {
   const letterStep = startPos + t;
@@ -797,12 +798,15 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
       let possible = false;
       for (let kk = minK; kk <= maxK; kk++){
         try{
-          const ok = solveVigUnknownAlphabet(letters, candidateCribMap, kk, {propagateOnly:true, quickTrials:getQuickTrials(), trialDepth:getTrialDepth()});
+          const solverOpts = {propagateOnly:true, quickTrials:getQuickTrials(), trialDepth:getTrialDepth()};
+          const ok = (op === 'vig_custom_alpha')
+            ? solveVigUnknownAlphabet(letters, candidateCribMap, kk, solverOpts)
+            : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, solverOpts);
           if (ok){ possible = true; break; }
         }catch(e){ /* ignore solver errors for this quick check */ }
       }
       if (possible){
-        results.push({ word: word, keyLength: null, key: null, decrypted: null, fitness: null, possible: true, op: 'vig_custom_alpha' });
+        results.push({ word: word, keyLength: null, key: null, decrypted: null, fitness: null, possible: true, op: op });
       }
       continue; // move to next word
     }
@@ -928,9 +932,9 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
   results.sort((a, b) => b.fitness - a.fitness);
   
   // If unknown alphabet mode and we only found a small set of possible words, expand them fully.
-  if (op === 'vig_custom_alpha') {
+  if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha') {
     const SMALL_THRESHOLD = 25;
-    const possible = results.filter(r => r.op === 'vig_custom_alpha' && r.possible === true);
+    const possible = results.filter(r => r.op === op && r.possible === true);
     if (possible.length > 0 && possible.length < SMALL_THRESHOLD) {
       const expanded = [];
       for (const cand of possible) {
@@ -945,9 +949,13 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
 }
         for (let kk=minK; kk<=maxK; kk++){
           try{
-            const sol = solveVigUnknownAlphabet(letters, candidateCribMap, kk);
+            const sol = (op === 'vig_custom_alpha')
+              ? solveVigUnknownAlphabet(letters, candidateCribMap, kk)
+              : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk);
             if (sol && sol.pos && sol.k) {
-              const fullDec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+              const fullDec = (op === 'vig_custom_alpha')
+                ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
+                : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
               const decLetters = sanitize(fullDec).split('');
               const fitness = englishFitness(decLetters);
               // Build alphabet string from pos[]
@@ -961,7 +969,7 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
                 alphabet: alphaStr,
                 decrypted: fullDec,
                 fitness: fitness,
-                op: 'vig_custom_alpha_full'
+                op: op + '_full'
               });
             }
           }catch(e){ /* ignore, continue */ }
@@ -970,7 +978,7 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
       // Prefer expanded results if we got any; otherwise fall back to the quick possibles
       if (expanded.length) {
         // Merge with any non-unknown results we computed (e.g., other ops)
-        const nonUnknown = results.filter(r => r.op !== 'vig_custom_alpha');
+        const nonUnknown = results.filter(r => r.op !== op);
         const merged = nonUnknown.concat(expanded);
         merged.sort((a,b)=> (isFinite(b.fitness)?b.fitness:-1) - (isFinite(a.fitness)?a.fitness:-1));
         results.length = 0;
@@ -1364,6 +1372,256 @@ function solveVigUnknownAlphabet(letters, cribMap, m, options){
 }
 
 
+
+function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
+  const N = 26;
+  if (!Number.isFinite(m) || m <= 0) return null;
+  const segments = collectContiguousCribs(letters, cribMap);
+  if (!segments.length) return null;
+  const { absToLetterStep } = buildLetterStreams(letters);
+  const stepPlain = new Map();
+  const stepCipher = new Map();
+  for (const seg of segments){
+    const startStep = absToLetterStep[seg.start];
+    if (startStep == null || startStep < 0) continue;
+    for (let t=0; t<seg.cipherSeg.length; t++){
+      const step = startStep + t;
+      const pSym = A2I[seg.plainSeg[t]];
+      const cSym = A2I[seg.cipherSeg[t]];
+      if (stepPlain.has(step) && stepPlain.get(step) !== pSym) return null;
+      if (stepCipher.has(step) && stepCipher.get(step) !== cSym) return null;
+      stepPlain.set(step, pSym);
+      stepCipher.set(step, cSym);
+    }
+  }
+  if (!stepPlain.size) return null;
+
+  const constraints = [];
+  const letterDeg = new Array(N).fill(0);
+  const keyDeg = new Array(m).fill(0);
+  const steps = Array.from(stepPlain.keys()).sort((a,b)=>a-b);
+  for (const step of steps){
+    const pSym = stepPlain.get(step);
+    const cSym = stepCipher.get(step);
+    if (pSym == null || cSym == null) continue;
+    if (step < m){
+      constraints.push({ type:'init', idx:step, pSym, cSym });
+      keyDeg[step]++;
+    }
+    const depStep = step - m;
+    if (depStep >= 0 && stepPlain.has(depStep)){
+      const depSym = stepPlain.get(depStep);
+      constraints.push({ type:'feed', idx:step, pSym, cSym, depSym });
+      letterDeg[depSym]++;
+    }
+    letterDeg[pSym]++;
+    letterDeg[cSym]++;
+  }
+  if (!constraints.length) return null;
+
+  const pos = new Array(N).fill(null);
+  const used = new Array(N).fill(false);
+  const keyInit = new Array(m).fill(null);
+
+  let anchor = -1, best = -1;
+  for (let L=0; L<N; L++){
+    if (letterDeg[L] > best){
+      best = letterDeg[L];
+      anchor = L;
+    }
+  }
+  if (anchor !== -1){
+    pos[anchor] = 0;
+    used[0] = true;
+  }
+
+  const mod = (x)=>((x%N)+N)%N;
+
+  function assignLetter(idx, value){
+    if (idx == null) return {ok:true, changed:false};
+    value = mod(value);
+    if (pos[idx] === null){
+      if (used[value]) return {ok:false, changed:false};
+      pos[idx] = value;
+      used[value] = true;
+      return {ok:true, changed:true};
+    }
+    return {ok: pos[idx] === value, changed:false};
+  }
+
+  function assignKey(idx, value){
+    value = mod(value);
+    if (keyInit[idx] === null){
+      keyInit[idx] = value;
+      return {ok:true, changed:true};
+    }
+    return {ok: keyInit[idx] === value, changed:false};
+  }
+
+  function propagate(){
+    let changed = true;
+    while (changed){
+      changed = false;
+      for (const cons of constraints){
+        if (cons.type === 'init'){
+          const a = pos[cons.pSym];
+          const b = pos[cons.cSym];
+          const keyVal = keyInit[cons.idx];
+          if (a !== null && b !== null){
+            const res = assignKey(cons.idx, b - a);
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+          if (a !== null && keyVal !== null){
+            const res = assignLetter(cons.cSym, a + keyVal);
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+          if (b !== null && keyVal !== null){
+            const res = assignLetter(cons.pSym, b - keyVal);
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+        } else {
+          const a = pos[cons.pSym];
+          const b = pos[cons.cSym];
+          const dep = pos[cons.depSym];
+          if (a !== null && dep !== null){
+            const res = assignLetter(cons.cSym, a + dep);
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+          const bNow = pos[cons.cSym];
+          const aNow = pos[cons.pSym];
+          const depNow = pos[cons.depSym];
+          if (bNow !== null && aNow !== null){
+            const res = assignLetter(cons.depSym, bNow - aNow);
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+          if (bNow !== null && depNow !== null){
+            const res = assignLetter(cons.pSym, bNow - depNow);
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  function chooseVar(){
+    let bestLetter=-1, bestScore=-1;
+    for (let L=0; L<N; L++){
+      if (pos[L]===null && letterDeg[L]>bestScore){
+        bestScore = letterDeg[L];
+        bestLetter = L;
+      }
+    }
+    if (bestLetter !== -1 && bestScore>0) return {type:'letter', idx:bestLetter};
+    let bestKey=-1, bestKeyScore=-1;
+    for (let i=0;i<m;i++){
+      if (keyInit[i]===null && keyDeg[i]>bestKeyScore){
+        bestKeyScore = keyDeg[i];
+        bestKey = i;
+      }
+    }
+    if (bestLetter !== -1) return {type:'letter', idx:bestLetter};
+    if (bestKey !== -1) return {type:'key', idx:bestKey};
+    return null;
+  }
+
+  function snapshot(){
+    return { pos: pos.slice(), used: used.slice(), key: keyInit.slice() };
+  }
+  function restore(state){
+    for (let i=0;i<N;i++){ pos[i]=state.pos[i]; used[i]=state.used[i]; }
+    for (let i=0;i<m;i++){ keyInit[i]=state.key[i]; }
+  }
+
+  function dfs(){
+    if (!propagate()) return null;
+    const sel = chooseVar();
+    if (!sel){
+      const posFull = pos.slice();
+      const free = [];
+      for (let v=0; v<N; v++){ if (!used[v]) free.push(v); }
+      for (let L=0; L<N; L++){ if (posFull[L]===null) posFull[L] = free.shift(); }
+      const keyFull = keyInit.slice().map(x => x===null ? 0 : mod(x));
+      return { pos: posFull, k: keyFull };
+    }
+    if (sel.type === 'letter'){
+      const candSet = new Set();
+      for (const cons of constraints){
+        if (cons.pSym === sel.idx){
+          if (cons.type === 'init'){
+            const b = pos[cons.cSym];
+            const keyVal = keyInit[cons.idx];
+            if (b !== null && keyVal !== null) candSet.add(mod(b - keyVal));
+          } else {
+            const b = pos[cons.cSym];
+            const dep = pos[cons.depSym];
+            if (b !== null && dep !== null) candSet.add(mod(b - dep));
+          }
+        }
+        if (cons.cSym === sel.idx){
+          if (cons.type === 'init'){
+            const a = pos[cons.pSym];
+            const keyVal = keyInit[cons.idx];
+            if (a !== null && keyVal !== null) candSet.add(mod(a + keyVal));
+          } else {
+            const a = pos[cons.pSym];
+            const dep = pos[cons.depSym];
+            if (a !== null && dep !== null) candSet.add(mod(a + dep));
+          }
+        }
+        if (cons.type === 'feed' && cons.depSym === sel.idx){
+          const a = pos[cons.pSym];
+          const b = pos[cons.cSym];
+          if (b !== null && a !== null) candSet.add(mod(b - a));
+        }
+      }
+      const free = [];
+      for (let v=0; v<N; v++){ if (!used[v]) free.push(v); }
+      const candidates = candSet.size ? Array.from(candSet).filter(v => !used[v]) : free;
+      for (const val of candidates){
+        const snap = snapshot();
+        const vv = mod(val);
+        pos[sel.idx] = vv;
+        used[vv] = true;
+        const res = dfs();
+        if (res) return res;
+        restore(snap);
+      }
+    } else {
+      const candSet = new Set();
+      for (const cons of constraints){
+        if (cons.type === 'init' && cons.idx === sel.idx){
+          const a = pos[cons.pSym];
+          const b = pos[cons.cSym];
+          if (a !== null && b !== null) candSet.add(mod(b - a));
+        }
+      }
+      const candidates = candSet.size ? Array.from(candSet) : [...Array(N).keys()];
+      for (const val of candidates){
+        const snap = snapshot();
+        keyInit[sel.idx] = mod(val);
+        const res = dfs();
+        if (res) return res;
+        restore(snap);
+      }
+    }
+    return null;
+  }
+
+  if (options && options.propagateOnly){
+    return propagate();
+  }
+
+  return dfs();
+}
+
+
 function decryptWithCustomAlphabet(letters, pos, k){
   const N=26;
   const inv=new Array(N); for (let L=0;L<N;L++) inv[pos[L]] = A[L];
@@ -1379,10 +1637,74 @@ function decryptWithCustomAlphabet(letters, pos, k){
   return out;
 }
 
+function decryptAutokeyUnknownAlphabet(letters, pos, keyInit){
+  const N = 26;
+  const inv = new Array(N); for (let L=0; L<N; L++) inv[pos[L]] = A[L];
+  const plainPositions = [];
+  let step = 0;
+  let out = '';
+  for (let i=0; i<letters.length; i++){
+    const ch = letters[i];
+    if (!isLetter(ch)){ out += ch; continue; }
+    const cIdx = pos[A2I[ch.toUpperCase()]];
+    let keyVal;
+    if (step < keyInit.length){
+      keyVal = keyInit[step];
+    } else {
+      keyVal = plainPositions[step - keyInit.length];
+    }
+    if (keyVal == null) keyVal = 0;
+    keyVal = ((keyVal % N) + N) % N;
+    const pIdx = ((cIdx - keyVal) % N + N) % N;
+    plainPositions.push(pIdx);
+    out += inv[pIdx];
+    step++;
+  }
+  return out;
+}
+
+function autokeyCoverageDiagnostics(letters, cribMap, m){
+  const segments = collectContiguousCribs(letters, cribMap);
+  const { absToLetterStep } = buildLetterStreams(letters);
+  const stepPlain = new Map();
+  const stepCipher = new Map();
+  for (const seg of segments){
+    const startStep = absToLetterStep[seg.start];
+    if (startStep == null || startStep < 0) continue;
+    for (let t=0; t<seg.cipherSeg.length; t++){
+      const step = startStep + t;
+      const pSym = A2I[seg.plainSeg[t]];
+      const cSym = A2I[seg.cipherSeg[t]];
+      if (!stepPlain.has(step)) stepPlain.set(step, pSym);
+      if (!stepCipher.has(step)) stepCipher.set(step, cSym);
+    }
+  }
+  const residues = Array.from({length:m}, ()=>0);
+  const missing = [];
+  let feedLinks = 0;
+  const steps = Array.from(stepPlain.keys()).sort((a,b)=>a-b);
+  for (const step of steps){
+    residues[step % m]++;
+    const dep = step - m;
+    if (dep >= 0){
+      feedLinks++;
+      if (!stepPlain.has(dep)){
+        missing.push({ step, dependsOn: dep });
+      }
+    }
+  }
+  return {
+    totalSteps: stepPlain.size,
+    residues,
+    feedLinks,
+    missingFeed: missing
+  };
+}
+
 // ===== Non-destructive wrapper for Test button =====
-async function testCribsWrapper(){
+async function runUnknownAlphabetInline(){
   const op = document.getElementById('op').value;
-  if (op !== 'vig_custom_alpha'){ 
+  if (op !== 'vig_custom_alpha' && op !== 'autokey_custom_alpha'){
     hideProgress();
     return testCribs(); // call the original
   }
@@ -1419,12 +1741,23 @@ async function testCribsWrapper(){
   out.textContent='';
   if (segments.length === 0){ summary.textContent='Enter at least one crib segment.'; return; }
   const total = (maxK - minK + 1);
-  showProgress(total, 'Unknown alphabet Vigenère');
+  const isVigMode = (op === 'vig_custom_alpha');
+  showProgress(total, isVigMode ? 'Unknown alphabet Vigenère' : 'Autokey + unknown alphabet');
   const results=[];
+  const coveragePerM = [];
   for (let kLen=minK; kLen<=maxK; kLen++){
-    const sol = solveVigUnknownAlphabet(letters, cribMap, kLen);
+    let coverage = null;
+    if (!isVigMode){
+      coverage = autokeyCoverageDiagnostics(letters, cribMap, kLen);
+      coveragePerM.push({ m: kLen, coverage });
+    }
+    const sol = isVigMode
+      ? solveVigUnknownAlphabet(letters, cribMap, kLen)
+      : solveAutokeyUnknownAlphabet(letters, cribMap, kLen);
     if (sol){
-      const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+      const dec = isVigMode
+        ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
+        : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
       const fitness = englishFitness( sanitize(dec).split('') );
       results.push({ keyLength:kLen, key: sol.k.map(x=>A[x]).join(''), preview: dec.slice(0,160), score: fitness, posRaw: sol.pos, kRaw: sol.k });
     }
@@ -1432,44 +1765,63 @@ async function testCribsWrapper(){
     if ((kLen - minK) % 1 === 0) await uiYield();
   }
   hideProgress();
-  
+
   if (!results.length){
-    // Build a quick debug: report constraints coverage and contradictions per m
-    let debugLines = [];
-    for (let kLen=minK; kLen<=maxK; kLen++){
-      // Rebuild constraints similar to solver head
-      const { cLetters, absToLetterStep } = buildLetterStreams(letters);
-      const stepToAbs = [];
-      for (let ai=0; ai<letters.length; ai++){ const s = absToLetterStep[ai]; if (s>=0) stepToAbs[s]=ai; }
-      const cons=[];
-      for (let i=0;i<letters.length;i++){
-        if (!isLetter(letters[i])) continue;
-        const baseStep = absToLetterStep[i];
-        const cribRaw = cribMap[i];
-        if (!cribRaw) continue;
-        const cribLetters = sanitize(cribRaw);
-        for (let j=0; j<cribLetters.length; j++){
-          const p = cribLetters[j];
-          if (!/[A-Z]/.test(p)) continue;
-          const step = baseStep + j;
-          const absIdx = stepToAbs[step];
-          if (absIdx === undefined) break;
-          const c = letters[absIdx].toUpperCase();
-          if (!/[A-Z]/.test(c)) continue;
-          cons.push({ r: step % kLen, pSym: A2I[p], cSym: A2I[c] });
+    if (isVigMode){
+      // Build a quick debug: report constraints coverage and contradictions per m
+      let debugLines = [];
+      for (let kLen=minK; kLen<=maxK; kLen++){
+        const { cLetters, absToLetterStep } = buildLetterStreams(letters);
+        const stepToAbs = [];
+        for (let ai=0; ai<letters.length; ai++){ const s = absToLetterStep[ai]; if (s>=0) stepToAbs[s]=ai; }
+        const cons=[];
+        for (let i=0;i<letters.length;i++){
+          if (!isLetter(letters[i])) continue;
+          const baseStep = absToLetterStep[i];
+          const cribRaw = cribMap[i];
+          if (!cribRaw) continue;
+          const cribLetters = sanitize(cribRaw);
+          for (let j=0; j<cribLetters.length; j++){
+            const p = cribLetters[j];
+            if (!/[A-Z]/.test(p)) continue;
+            const step = baseStep + j;
+            const absIdx = stepToAbs[step];
+            if (absIdx === undefined) break;
+            const c = letters[absIdx].toUpperCase();
+            if (!/[A-Z]/.test(c)) continue;
+            cons.push({ r: step % kLen, pSym: A2I[p], cSym: A2I[c] });
+          }
+        }
+        const byR = Array.from({length:kLen},()=>[]); cons.forEach(c=>byR[c.r].push(c));
+        let cover = byR.filter(g=>g.length>0).length;
+        const contrad = false;
+        debugLines.push(`m=${kLen}: constraints=${cons.length}, residuesHit=${cover}/${kLen}, contradictions=${contrad}`);
+      }
+      summary.textContent = `No solution for key lengths ${minK}..${maxK} under this model.`;
+      const pre = document.createElement('pre'); pre.className='small muted'; pre.textContent = debugLines.join('\n');
+      out.appendChild(pre);
+    } else {
+      summary.textContent = `No solution for key lengths ${minK}..${maxK} under autokey + unknown alphabet.`;
+      const pre = document.createElement('pre'); pre.className='small muted';
+      const detailLines = [];
+      for (const {m, coverage} of coveragePerM){
+        if (!coverage) continue;
+        const missing = coverage.missingFeed.length;
+        const feed = coverage.feedLinks;
+        const residues = coverage.residues.map((cnt, idx)=>`${idx}:${cnt}`).join(', ');
+        detailLines.push(`m=${m}: crib steps=${coverage.totalSteps}, feed links=${feed}, missing feed=${missing}, residues {${residues}}`);
+        if (missing>0){
+          const sample = coverage.missingFeed.slice(0,5).map(({step, dependsOn})=>`(${step}<-${dependsOn})`).join(' ');
+          if (sample) detailLines.push(`  uncovered autokey links: ${sample}${coverage.missingFeed.length>5?' …':''}`);
         }
       }
-      // residue coverage and contradictions
-      const byR = Array.from({length:kLen},()=>[]); cons.forEach(c=>byR[c.r].push(c));
-      let cover = byR.filter(g=>g.length>0).length;
-      // Skip contradiction pre-check here: alphabet positions are unknown in this phase.
-      // We only compute contradictions inside the DFS when pos[] becomes available.
-      const contrad = false;
-      debugLines.push(`m=${kLen}: constraints=${cons.length}, residuesHit=${cover}/${kLen}, contradictions=${contrad}`);
+      if (detailLines.length){
+        pre.textContent = detailLines.join('\n');
+      } else {
+        pre.textContent = 'Autokey mode relies on chained crib coverage (positions spaced by the key length). Try adding overlapping cribs or narrowing the key-length range.';
+      }
+      out.appendChild(pre);
     }
-    summary.textContent = `No solution for key lengths ${minK}..${maxK} under this model.`;
-    const pre = document.createElement('pre'); pre.className='small muted'; pre.textContent = debugLines.join('\n');
-    out.appendChild(pre);
     return;
   }
   results.sort((a,b)=>b.score - a.score);
@@ -1483,11 +1835,13 @@ try{
       const inv = new Array(N);
       for (let L=0; L<N; L++){ inv[best.posRaw[L]] = A[L]; }
       const alphaStr = inv.join('');
-      const fullText = decryptWithCustomAlphabet(letters, best.posRaw, best.kRaw);
+      const fullText = isVigMode
+        ? decryptWithCustomAlphabet(letters, best.posRaw, best.kRaw)
+        : decryptAutokeyUnknownAlphabet(letters, best.posRaw, best.kRaw);
       const fullBlock = document.createElement('pre');
       fullBlock.textContent =
         `Best candidate (m=${best.keyLength})\n` +
-        `key residues: ${best.key}\n` +
+        `initial key: ${best.key}\n` +
         `alphabet:    ${alphaStr}\n\n` +
         fullText;
       out.appendChild(fullBlock);
@@ -1495,16 +1849,16 @@ try{
   }
 }catch(e){ console.warn('Summary render failed', e); }
 
-  summary.textContent = `Found ${results.length} solution(s) for unknown alphabet Vigenère.`;
+  summary.textContent = isVigMode
+    ? `Found ${results.length} solution(s) for unknown alphabet Vigenère.`
+    : `Found ${results.length} solution(s) for autokey + unknown alphabet.`;
   results.slice(0,50).forEach((r,idx)=>{
     const div=document.createElement('div'); div.className='row';
-    const head=document.createElement('div'); head.textContent = `#${idx+1}  m=${r.keyLength}  keyResidues=${r.key}`;
+    const head=document.createElement('div'); head.textContent = `#${idx+1}  m=${r.keyLength}  initialKey=${r.key}`;
     const body=document.createElement('div'); body.className='small muted'; body.textContent=r.preview;
     div.appendChild(head); div.appendChild(body); out.appendChild(div);
   });
 }
-document.getElementById('test').removeEventListener('click', testCribs);
-document.getElementById('test').addEventListener('click', testCribsWrapper);
 </script>
 
   </div>
@@ -1515,564 +1869,433 @@ document.getElementById('test').addEventListener('click', testCribsWrapper);
   </div>
 
 
-<script>
-(function(){
-  // Lightweight async harness with NO extra UI.
-  function $(id){ return document.getElementById(id); }
-  const BTN_TEST = $("test");
-  const SEL_OP   = $("op");
-  const BTN_STOP = $("stopSearch");
-  const OUT      = $("out") || { textContent: "" };
-  const SUMMARY  = $("summary") || { textContent: "" };
+  <script>
+  (function(){
+    function $(id){ return document.getElementById(id); }
+    const BTN_TEST = $("test");
+    const BTN_STOP = $("stopSearch");
+    const SEL_OP   = $("op");
+    const OUT      = $("out");
+    const SUMMARY  = $("summary");
+    const CAND_CNT = $("uaCandidatesCount");
 
-  let uaWorker = null;
+    let uaWorker = null;
 
-  function gatherForWorker(){
-    const letters = ( $("ctext") ? $("ctext").value : "" ).split("");
-    const inputs = document.querySelectorAll("input.cribin");
-    const cribPairs = [];
-    inputs.forEach(inp => {
-      const v = (inp.value || "").toUpperCase().replace(/[^A-Z]/g,"");
-      if (!v) return;
-      const pos = parseInt(inp.dataset.pos);
-      if (!Number.isFinite(pos)) return;
-      cribPairs.push([pos, v]);
-    });
-    const minK = $("minK") ? parseInt($("minK").value) : 2;
-    const maxK = $("maxK") ? parseInt($("maxK").value) : 20;
-    return { letters, cribPairs, minK, maxK };
-  }
-
-  function makeWorker(){
-    const src = `let __candsFound = 0;
-
-      const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      const A2I = {}; for (let i=0;i<26;i++) A2I[A[i]] = i;
-      function isLetter(ch){ return ch && /[A-Za-z]/.test(ch); }
-      function sanitize(s){ return (s||'').toUpperCase().replace(/[^A-Z]/g,''); }
-      function buildLetterStreams(letters){
-        const cLetters = [];
-        const absToLetterStep = new Array(letters.length).fill(-1);
-        let step = 0;
-        for (let i=0;i<letters.length;i++){
-          const ch = letters[i];
-          if (isLetter(ch)){ cLetters.push(ch.toUpperCase()); absToLetterStep[i]=step++; }
-        }
-        return { cLetters, absToLetterStep };
-      }
-      function collectContiguousCribs(letters, cribMap){
-        const segments = [];
-        const isAZ = ch => /^[A-Za-z]$/.test(ch || '');
-        let i = 0;
-        while (i < letters.length){
-          if (!isLetter(letters[i])){ i++; continue; }
-          if (cribMap[i] && isAZ(cribMap[i])){
-            let j=i;
-            let cipherSeg='', plainSeg='';
-            while (j < letters.length && isLetter(letters[j]) && cribMap[j] && isAZ(cribMap[j])){
-              cipherSeg += letters[j].toUpperCase();
-              plainSeg  += (cribMap[j] + '').toUpperCase();
-              j++;
-            }
-            const cSan = sanitize(cipherSeg);
-            const pSan = sanitize(plainSeg);
-            if (cSan.length > 0 && pSan.length === cSan.length){
-              segments.push({ start:i, cipherSeg:cSan, plainSeg:pSan });
-            }
-            i=j;
-          } else i++;
-        }
-        return segments;
-      }
-      function englishFitness(upArr){
-        const FREQ = {'E':12.0,'T':9.1,'A':8.2,'O':7.5,'I':7.0,'N':6.7,'S':6.3,'R':6.0,'H':6.1,'L':4.0,'D':4.3,'C':2.8,'U':2.8,'M':2.4,'F':2.2,'Y':2.0,'W':2.4,'G':2.0,'P':1.9,'B':1.5,'V':1.0,'K':0.8,'X':0.2,'Q':0.1,'J':0.15,'Z':0.07};
-        const n = upArr.length||1;
-        const cnt={}; for (const ch of upArr){ cnt[ch]=(cnt[ch]||0)+1; }
-        let chi=0; for (const ch of A){ const obs=(cnt[ch]||0); const exp=FREQ[ch]*n/100; if (exp>0) chi += (obs-exp)*(obs-exp)/exp; }
-        return -chi;
-      }
-      function solveVigUnknownAlphabet(letters, cribMap, m, progressCb){
-        const N=26;
-        const segments = collectContiguousCribs(letters, cribMap);
-        const { cLetters, absToLetterStep } = buildLetterStreams(letters);
-        const cons=[];
-        for (const seg of segments){
-          let letterIdx=-1;
-          for (let i=0, seen=0; i<letters.length; i++){
-            if (isLetter(letters[i])){
-              if (i === seg.start){ letterIdx=seen; break; }
-              seen++;
-            }
-          }
-          if (letterIdx < 0) continue;
-          for (let t=0; t<seg.cipherSeg.length; t++){
-            const pSym = A2I[seg.plainSeg[t]];
-            const cSym = A2I[seg.cipherSeg[t]];
-            const r = (letterIdx + t) % m;
-            cons.push({ r, pSym, cSym });
-          }
-        }
-        if (!cons.length) return null;
-        const byR = Array.from({length:m},()=>[]);
-        cons.forEach(c => byR[c.r].push(c));
-        const pos = new Array(N).fill(null);
-        const used = new Array(N).fill(false);
-        const k   = new Array(m).fill(null);
-        const deg = new Array(N).fill(0);
-        for (const {pSym,cSym} of cons){ deg[pSym]++; deg[cSym]++; }
-        let anchor=-1, best=-1;
-        for (let L=0; L<N; L++){ if (deg[L]>best){ best=deg[L]; anchor=L; } }
-        if (anchor!==-1){ pos[anchor]=0; used[0]=true; }
-        const mod = (x)=>((x%26)+26)%26;
-        function propagate(){
-          let changed=true;
-          while(changed){
-            changed=false;
-            for (const {r,pSym,cSym} of cons){
-              const a=pos[pSym], b=pos[cSym];
-              if (a!==null && b!==null){
-                const need=mod(b-a);
-                if (k[r]===null){ k[r]=need; changed=true; }
-                else if (k[r]!==need) return false;
-              } else if (k[r]!==null){
-                if (a!==null && b===null){
-                  const need=mod(a+k[r]);
-                  if (used[need] && pos[cSym]!==need) return false;
-                  if (pos[cSym]===null){ pos[cSym]=need; used[need]=true; changed=true; }
-                  else if (pos[cSym]!==need) return false;
-                } else if (a===null && b!==null){
-                  const need=mod(b-k[r]);
-                  if (used[need] && pos[pSym]!==need) return false;
-                  if (pos[pSym]===null){ pos[pSym]=need; used[need]=true; changed=true; }
-                  else if (pos[pSym]!==need) return false;
-                }
-              }
-            }
-            const seen = new Set();
-            for (let L=0; L<N; L++){
-              const v = pos[L];
-              if (v===null) continue;
-              if (seen.has(v)) return false;
-              seen.add(v);
-            }
-          }
-          return true;
-        }
-        function chooseVar(){
-          let rr=-1, best=-1;
-          for (let r=0;r<m;r++){ if (k[r]===null && byR[r].length>best){best=byR[r].length; rr=r;} }
-          if (rr!==-1) return {type:'r', idx:rr};
-          const appear=new Set(); cons.forEach(({pSym,cSym})=>{appear.add(pSym); appear.add(cSym);});
-          const counts=new Array(N).fill(0); cons.forEach(({pSym,cSym})=>{counts[pSym]++; counts[cSym]++;});
-          let bestL=-1, b=-1;
-          for (let L=0; L<26; L++){ if (!appear.has(L)) continue; if (pos[L]===null && counts[L]>b){ b=counts[L]; bestL=L; } }
-          if (bestL!==-1) return {type:'p', idx:bestL};
-          return null;
-        }
-        function snap(){ return { pos: pos.slice(), used: used.slice(), k: k.slice() }; }
-        function restore(S){ for (let i=0;i<26;i++){ pos[i]=S.pos[i]; used[i]=S.used[i]; } for (let i=0;i<m;i++){ k[i]=S.k[i]; } }
-        let nodes=0, lastPing=0;
-        function dfs(){
-          if (!propagate()) return null;
-          const sel = chooseVar();
-          if (!sel){
-            const posFull = pos.slice();
-            const free=[]; for (let v=0; v<26; v++){ if (!used[v]) free.push(v); }
-            for (let L=0; L<26; L++){ if (posFull[L]===null) posFull[L]=free.shift(); }
-            const key = k.map(x=>x===null?0:x);
-            return { pos: posFull, k: key };
-          }
-          nodes++;
-          const now = (typeof performance!=='undefined'?performance.now():0);
-          if (now - lastPing > 120){ lastPing = now; progressCb && progressCb({kind:'dfs', nodes}); }
-          if (sel.type === 'r'){
-            const r = sel.idx;
-            let cand=null;
-            for (const {pSym,cSym} of byR[r]){
-              if (pos[pSym]!==null && pos[cSym]!==null){ cand=[mod(pos[cSym]-pos[pSym])]; break; }
-            }
-            if (!cand){
-              const diffs=new Set();
-              const g = byR[r];
-              for (let i=0;i<g.length;i++){
-                for (let j=i+1;j<g.length;j++){
-                  const a=g[i], b=g[j];
-                  if (a.pSym===b.pSym){
-                    const p=a.pSym;
-                    if (pos[p]!==null && pos[a.cSym]!==null) diffs.add(mod(pos[a.cSym]-pos[p]));
-                    if (pos[p]!==null && pos[b.cSym]!==null) diffs.add(mod(pos[b.cSym]-pos[p]));
-                  }
-                  if (a.cSym===b.cSym){
-                    const c=a.cSym;
-                    if (pos[c]!==null && pos[a.pSym]!==null) diffs.add(mod(pos[c]-pos[a.pSym]));
-                    if (pos[c]!==null && pos[b.pSym]!==null) diffs.add(mod(pos[c]-pos[b.pSym]));
-                  }
-                }
-              }
-              cand = diffs.size ? Array.from(diffs) : [...Array(26).keys()];
-            }
-            for (const val of cand){
-              const S = snap(); k[r]=val;
-              const res = dfs(); if (res) return res;
-              restore(S);
-            }
-            return null;
-          } else {
-            const L = sel.idx;
-            const free=[]; for (let v=0; v<26; v++){ if (!used[v]) free.push(v); }
-            for (const v of free){
-              const S = snap(); pos[L]=v; used[v]=true;
-              const res = dfs(); if (res) return res;
-              restore(S);
-            }
-            return null;
-          }
-        }
-        return dfs();
-      }
-      function decryptWithCustomAlphabet(letters, pos, k){
-        const inv = new Array(26); for (let L=0; L<26; L++) inv[pos[L]] = String.fromCharCode(65+L);
-        let out=''; let step=0;
-        for (let i=0;i<letters.length;i++){
-          const ch=letters[i];
-          if (!isLetter(ch)){ out+=ch; continue; }
-          const cIdx = pos[ch.toUpperCase().charCodeAt(0)-65];
-          const pIdx = ((cIdx - k[step % k.length]) % 26 + 26) % 26;
-          out += inv[pIdx];
-          step++;
-        }
-        return out;
-      }
-      onmessage = (ev)=>{
-        const msg = ev.data||{};
-        if (msg && msg.cmd === 'start'){
-          const letters = msg.letters;
-          const cribMap = {}; for (const pair of msg.cribPairs){ cribMap[pair[0]] = pair[1]; }
-          const minK = msg.minK|0, maxK = msg.maxK|0;
-          const total = Math.max(1, maxK - minK + 1);
-          postMessage({ kind:'progress', done:0, total, label:'m='+minK, candidatesFound: __candsFound });
-          const results=[];
-          for (let m=minK; m<=maxK; m++){
-            const sol = solveVigUnknownAlphabet(letters, cribMap, m, (p)=>postMessage({kind:'hint', m, p}));
-            if (sol){
-              const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
-              const fit = englishFitness(dec.toUpperCase().replace(/[^A-Z]/g,'').split(''));
-              __candsFound++; results.push({ keyLength:m, key: sol.k.map(v=>String.fromCharCode(65+v)).join(''), pos: sol.pos, k: sol.k, score: fit, preview: dec.slice(0,200), full: dec });
-            }
-            postMessage({ kind:'progress', done:(m - minK + 1), total, label:'m='+m, candidatesFound: __candsFound });
-          }
-          results.sort((a,b)=>b.score-a.score);
-          postMessage({kind:'done', results});
-        }
-      };
-    `;
-    const blob = new Blob([src], {type:"application/javascript"});
-    return new Worker(URL.createObjectURL(blob));
-  }
-
-  function startWorkerSolve(){
-    if (BTN_STOP) { BTN_STOP.style.display = 'inline-block'; BTN_STOP.disabled = false; }
-    if (BTN_TEST) BTN_TEST.disabled = true;
-    if (SUMMARY) SUMMARY.textContent = "Running unknown alphabet Vigenère…";
-    if (OUT) OUT.textContent = "";
-    const payload = gatherForWorker();
-    if (!payload.cribPairs.length){
-      if (SUMMARY) SUMMARY.textContent = "Enter at least one crib segment first.";
-      return;
+    function gatherForWorker(){
+      const letters = ($("ctext") ? $("ctext").value : "").split("");
+      const inputs = document.querySelectorAll("input.cribin");
+      const cribPairs = [];
+      inputs.forEach(inp => {
+        const v = (inp.value || "").toUpperCase().replace(/[^A-Z]/g,"");
+        if (!v) return;
+        const pos = parseInt(inp.dataset.pos);
+        if (!Number.isFinite(pos)) return;
+        cribPairs.push([pos, v]);
+      });
+      const minK = $("minK") ? parseInt($("minK").value) : 2;
+      const maxK = $("maxK") ? parseInt($("maxK").value) : 20;
+      return { letters, cribPairs, minK, maxK };
     }
-    if (uaWorker) { try { uaWorker.terminate(); } catch(e){} }
-    uaWorker = makeWorker();
-    uaWorker.onerror = (e) => {
-      if (SUMMARY) SUMMARY.textContent = "Worker error (stopped).";
+
+    function makeWorker(){
+      const src = `let __candsFound = 0;
+
+        const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        const A2I = {}; for (let i=0;i<26;i++) A2I[A[i]] = i;
+        function isLetter(ch){ return ch && /[A-Za-z]/.test(ch); }
+        function sanitize(s){ return (s||'').toUpperCase().replace(/[^A-Z]/g,''); }
+        function buildLetterStreams(letters){
+          const cLetters = [];
+          const absToLetterStep = new Array(letters.length).fill(-1);
+          let step = 0;
+          for (let i=0;i<letters.length;i++){
+            const ch = letters[i];
+            if (isLetter(ch)){ cLetters.push(ch.toUpperCase()); absToLetterStep[i]=step++; }
+          }
+          return { cLetters, absToLetterStep };
+        }
+        function collectContiguousCribs(letters, cribMap){
+          const segments = [];
+          const isAZ = ch => /^[A-Za-z]$/.test(ch || '');
+          let i = 0;
+          while (i < letters.length){
+            if (!isLetter(letters[i])){ i++; continue; }
+            if (cribMap[i] && isAZ(cribMap[i])){
+              let j=i;
+              let cipherSeg='', plainSeg='';
+              while (j < letters.length && isLetter(letters[j]) && cribMap[j] && isAZ(cribMap[j])){
+                cipherSeg += letters[j].toUpperCase();
+                plainSeg  += (cribMap[j] + '').toUpperCase();
+                j++;
+              }
+              const cSan = sanitize(cipherSeg);
+              const pSan = sanitize(plainSeg);
+              if (cSan.length > 0 && pSan.length === cSan.length){
+                segments.push({ start:i, cipherSeg:cSan, plainSeg:pSan });
+              }
+              i=j;
+            } else i++;
+          }
+          return segments;
+        }
+        function englishFitness(upArr){
+          const FREQ = {'E':12.0,'T':9.1,'A':8.2,'O':7.5,'I':7.0,'N':6.7,'S':6.3,'R':6.0,'H':6.1,'L':4.0,'D':4.3,'C':2.8,'U':2.8,'M':2.4,'F':2.2,'Y':2.0,'W':2.4,'G':2.0,'P':1.9,'B':1.5,'V':1.0,'K':0.8,'X':0.2,'Q':0.1,'J':0.15,'Z':0.07};
+          const n = upArr.length||1;
+          const cnt={}; for (const ch of upArr){ cnt[ch]=(cnt[ch]||0)+1; }
+          let chi=0; for (const ch of A){ const obs=(cnt[ch]||0); const exp=FREQ[ch]*n/100; if (exp>0) chi += (obs-exp)*(obs-exp)/exp; }
+          return -chi;
+        }
+        function solveVigUnknownAlphabet(letters, cribMap, m, progressCb){
+          const N=26;
+          const segments = collectContiguousCribs(letters, cribMap);
+          const { cLetters, absToLetterStep } = buildLetterStreams(letters);
+          const cons=[];
+          for (const seg of segments){
+            let letterIdx=-1;
+            for (let i=0, seen=0; i<letters.length; i++){
+              if (isLetter(letters[i])){
+                if (i === seg.start){ letterIdx=seen; break; }
+                seen++;
+              }
+            }
+            if (letterIdx < 0) continue;
+            for (let t=0; t<seg.cipherSeg.length; t++){
+              const pSym = A2I[seg.plainSeg[t]];
+              const cSym = A2I[seg.cipherSeg[t]];
+              const r = (letterIdx + t) % m;
+              cons.push({ r, pSym, cSym });
+            }
+          }
+          if (!cons.length) return null;
+          const byR = Array.from({length:m},()=>[]);
+          cons.forEach(c => byR[c.r].push(c));
+          const pos = new Array(N).fill(null);
+          const used = new Array(N).fill(false);
+          const k   = new Array(m).fill(null);
+          const deg = new Array(N).fill(0);
+          for (const {pSym,cSym} of cons){ deg[pSym]++; deg[cSym]++; }
+          let anchor=-1, best=-1;
+          for (let L=0; L<N; L++){ if (deg[L]>best){ best=deg[L]; anchor=L; } }
+          if (anchor!==-1){ pos[anchor]=0; used[0]=true; }
+          const mod = (x)=>((x%26)+26)%26;
+          function propagate(){
+            let changed=true;
+            while(changed){
+              changed=false;
+              for (const {r,pSym,cSym} of cons){
+                const a=pos[pSym], b=pos[cSym];
+                if (a!==null && b!==null){
+                  const need=mod(b-a);
+                  if (k[r]===null){ k[r]=need; changed=true; }
+                  else if (k[r]!==need) return false;
+                } else if (k[r]!==null){
+                  if (a!==null && b===null){
+                    const need=mod(a+k[r]);
+                    if (used[need] && pos[cSym]!==need) return false;
+                    if (pos[cSym]===null){ pos[cSym]=need; used[need]=true; changed=true; }
+                    else if (pos[cSym]!==need) return false;
+                  } else if (a===null && b!==null){
+                    const need=mod(b-k[r]);
+                    if (used[need] && pos[pSym]!==need) return false;
+                    if (pos[pSym]===null){ pos[pSym]=need; used[need]=true; changed=true; }
+                    else if (pos[pSym]!==need) return false;
+                  }
+                }
+              }
+              const seen = new Set();
+              for (let L=0; L<N; L++){
+                const v = pos[L];
+                if (v===null) continue;
+                if (seen.has(v)) return false;
+                seen.add(v);
+              }
+            }
+            return true;
+          }
+          function chooseVar(){
+            let rr=-1, best=-1;
+            for (let r=0;r<m;r++){ if (k[r]===null && byR[r].length>best){best=byR[r].length; rr=r;} }
+            if (rr!==-1) return {type:'r', idx:rr};
+            const appear=new Set(); cons.forEach(({pSym,cSym})=>{appear.add(pSym); appear.add(cSym);});
+            const counts=new Array(N).fill(0); cons.forEach(({pSym,cSym})=>{counts[pSym]++; counts[cSym]++;});
+            let bestL=-1, b=-1;
+            for (let L=0; L<26; L++){ if (!appear.has(L)) continue; if (pos[L]===null && counts[L]>b){ b=counts[L]; bestL=L; } }
+            if (bestL!==-1) return {type:'p', idx:bestL};
+            return null;
+          }
+          function snap(){ return { pos: pos.slice(), used: used.slice(), k: k.slice() }; }
+          function restore(S){ for (let i=0;i<26;i++){ pos[i]=S.pos[i]; used[i]=S.used[i]; } for (let i=0;i<m;i++){ k[i]=S.k[i]; } }
+          let nodes=0, lastPing=0;
+          function dfs(){
+            if (!propagate()) return null;
+            const sel = chooseVar();
+            if (!sel){
+              const posFull = pos.slice();
+              const free=[]; for (let v=0; v<26; v++){ if (!used[v]) free.push(v); }
+              for (let L=0; L<26; L++){ if (posFull[L]===null) posFull[L]=free.shift(); }
+              const key = k.map(x=>x===null?0:x);
+              return { pos: posFull, k: key };
+            }
+            nodes++;
+            const now = (typeof performance!=='undefined'?performance.now():0);
+            if (now - lastPing > 120){ lastPing = now; progressCb && progressCb({kind:'dfs', nodes}); }
+            if (sel.type === 'r'){
+              const r = sel.idx;
+              let cand=null;
+              for (const {pSym,cSym} of byR[r]){
+                if (pos[pSym]!==null && pos[cSym]!==null){ cand=[mod(pos[cSym]-pos[pSym])]; break; }
+              }
+              if (!cand){
+                const diffs=new Set();
+                const g = byR[r];
+                for (let i=0;i<g.length;i++){
+                  for (let j=i+1;j<g.length;j++){
+                    const a=g[i], b=g[j];
+                    if (a.pSym===b.pSym){
+                      const p=a.pSym;
+                      if (pos[p]!==null && pos[a.cSym]!==null) diffs.add(mod(pos[a.cSym]-pos[p]));
+                      if (pos[p]!==null && pos[b.cSym]!==null) diffs.add(mod(pos[b.cSym]-pos[p]));
+                    }
+                    if (a.cSym===b.cSym){
+                      const c=a.cSym;
+                      if (pos[c]!==null && pos[a.pSym]!==null) diffs.add(mod(pos[c]-pos[a.pSym]));
+                      if (pos[c]!==null && pos[b.pSym]!==null) diffs.add(mod(pos[c]-pos[b.pSym]));
+                    }
+                  }
+                }
+                cand = diffs.size ? Array.from(diffs) : [...Array(26).keys()];
+              }
+              for (const val of cand){
+                const S = snap(); k[r]=val;
+                const res = dfs(); if (res) return res;
+                restore(S);
+              }
+              return null;
+            } else {
+              const L = sel.idx;
+              const free=[]; for (let v=0; v<26; v++){ if (!used[v]) free.push(v); }
+              for (const v of free){
+                const S = snap(); pos[L]=v; used[v]=true;
+                const res = dfs(); if (res) return res;
+                restore(S);
+              }
+              return null;
+            }
+          }
+          return dfs();
+        }
+        function decryptWithCustomAlphabet(letters, pos, k){
+          const inv = new Array(26); for (let L=0; L<26; L++) inv[pos[L]] = String.fromCharCode(65+L);
+          let out=''; let step=0;
+          for (let i=0;i<letters.length;i++){
+            const ch=letters[i];
+            if (!isLetter(ch)){ out+=ch; continue; }
+            const cIdx = pos[ch.toUpperCase().charCodeAt(0)-65];
+            const pIdx = ((cIdx - k[step % k.length]) % 26 + 26) % 26;
+            out += inv[pIdx];
+            step++;
+          }
+          return out;
+        }
+        onmessage = (ev)=>{
+          const msg = ev.data||{};
+          if (msg && msg.cmd === 'start'){
+            const letters = msg.letters;
+            const cribMap = {}; for (const pair of msg.cribPairs){ cribMap[pair[0]] = pair[1]; }
+            const minK = msg.minK|0, maxK = msg.maxK|0;
+            const total = Math.max(1, maxK - minK + 1);
+            postMessage({ kind:'progress', done:0, total, label:'m='+minK, candidatesFound: __candsFound });
+            const results=[];
+            for (let m=minK; m<=maxK; m++){
+              const sol = solveVigUnknownAlphabet(letters, cribMap, m, (p)=>postMessage({kind:'hint', m, p}));
+              if (sol){
+                const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+                const fit = englishFitness(dec.toUpperCase().replace(/[^A-Z]/g,'').split(''));
+                __candsFound++; results.push({ keyLength:m, key: sol.k.map(v=>String.fromCharCode(65+v)).join(''), pos: sol.pos, k: sol.k, score: fit, preview: dec.slice(0,200), full: dec });
+              }
+              postMessage({ kind:'progress', done:(m - minK + 1), total, label:'m='+m, candidatesFound: __candsFound });
+            }
+            results.sort((a,b)=>b.score-a.score);
+            postMessage({kind:'done', results});
+          }
+        };
+      `;
+      return new Worker(URL.createObjectURL(new Blob([src], {type:"application/javascript"})));
+    }
+
+    function resetStop(){
+      if (BTN_STOP){
+        BTN_STOP.style.display = 'none';
+        BTN_STOP.disabled = true;
+      }
+    }
+
+    function updateStopVisibility(){
+      if (!BTN_STOP) return;
+      const show = !!(SEL_OP && SEL_OP.value === 'vig_custom_alpha');
+      BTN_STOP.style.display = show ? 'inline-block' : 'none';
+      BTN_STOP.disabled = !show;
+    }
+
+    function stopWorker(summaryText, outText){
+      if (uaWorker){
+        try { uaWorker.postMessage({cmd:'cancel'}); } catch(e){}
+        try { uaWorker.terminate(); } catch(e){}
+        uaWorker = null;
+      }
       hideProgress();
       if (BTN_TEST) BTN_TEST.disabled = false;
-      if (BTN_STOP) BTN_STOP.disabled = true;
-    };
-    uaWorker.onmessage = (ev) => {
-  try {
-    const d = ev && ev.data ? ev.data : null;
-    if (d && d.kind === 'progress' && typeof d.candidatesFound === 'number') {
-      const el = document.getElementById('uaCandidatesCount');
-      if (el) el.textContent = String(d.candidatesFound);
+      resetStop();
+      if (typeof summaryText === 'string' && SUMMARY) SUMMARY.textContent = summaryText;
+      if (typeof outText === 'string' && OUT) OUT.textContent = outText;
     }
-  } catch(_e){}
 
-      const {kind} = ev.data||{};
-      if (kind === "hint"){
-        // Protocol B: DFS node-count progress
-        const p = ev.data && ev.data.p || null;
-        if (p && p.kind === 'dfs'){
-          const nodes = (p.nodes|0) || 0;
-          const mVal = ev.data.m;
-          // Ensure panel exists
-          const panel = ensureProgressPanel();
-          // Dynamic total that grows as search continues so the bar keeps moving
-          let total = parseInt(panel.dataset.total || '0');
-          if (!total || nodes >= (total - 200)){
-            total = nodes + 1000; // keep 10-15% headroom
-            panel.dataset.total = String(total);
-            // Do NOT reset the bar; just update label to reflect new total
-            const lab = document.getElementById('progressLabel');
-            if (lab) lab.textContent = 'm=' + mVal + ' — nodes: ' + nodes.toLocaleString();
-          }
-          updateProgress(nodes, 'm=' + mVal + ' — nodes: ' + nodes.toLocaleString());
-        }
+    function startWorkerSolve(){
+      const payload = gatherForWorker();
+      if (!payload.cribPairs.length){
+        if (SUMMARY) SUMMARY.textContent = 'Enter at least one crib segment first.';
         return;
       }
+      if (BTN_TEST) BTN_TEST.disabled = true;
+      if (BTN_STOP){
+        BTN_STOP.style.display = 'inline-block';
+        BTN_STOP.disabled = false;
+      }
+      if (SUMMARY) SUMMARY.textContent = 'Running unknown alphabet Vigenère…';
+      if (OUT) OUT.textContent = '';
+      if (CAND_CNT) CAND_CNT.textContent = '0';
+      showProgress(1, 'Estimating search space…');
 
-      if (kind === "progress"){
-        if (typeof window.showProgress === "function" && typeof window.updateProgress === "function"){
-          const panel = document.getElementById('progressPanel');
-          const currentTotal = panel ? parseInt(panel.dataset.total || '0') : 0;
-          const total = (ev.data.total|0) || 1;
-          if (!panel || currentTotal !== total) {
-            showProgress(total, ev.data.label || "");
-          }
-          updateProgress((ev.data.done|0) || 0, ev.data.label || "");
+      if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
+      uaWorker = makeWorker();
+
+      const streamed = [];
+      let initializedTotal = false;
+      let dynTotal = 0;
+      let nodeSeen = 0;
+
+      uaWorker.onmessage = (ev) => {
+        const data = ev && ev.data ? ev.data : {};
+        if (data && typeof data.candidatesFound === 'number' && CAND_CNT){
+          CAND_CNT.textContent = String(data.candidatesFound);
         }
-      } else if (kind === "done"){
-        if (BTN_TEST) BTN_TEST.disabled = false;
-        if (BTN_STOP) BTN_STOP.disabled = true;
-        const results = ev.data.results||[];
-        if (!results.length){
-          if (SUMMARY) SUMMARY.textContent = "No solution found for unknown alphabet Vigenère at the specified key lengths.";
+        const kind = data.type || data.kind || data.event;
+        if (kind === 'progress' || kind === 'hint'){
+          if ('total' in data && 'done' in data){
+            const panel = ensureProgressPanel();
+            const totalNum = Math.max(1, data.total|0);
+            const currentTotal = parseInt(panel.dataset.total || '0');
+            if (!initializedTotal || currentTotal !== totalNum){
+              showProgress(totalNum, data.label || 'Working…');
+              initializedTotal = true;
+            }
+            updateProgress(data.done|0, data.label || '');
+            return;
+          }
+          const dfs = data.p && data.p.kind === 'dfs' ? data.p : (kind === 'dfs' ? data : null);
+          if (dfs && typeof dfs.nodes === 'number'){
+            nodeSeen = dfs.nodes|0;
+            if (dynTotal < nodeSeen + 100) dynTotal = nodeSeen + 1000;
+            const panel = ensureProgressPanel();
+            const currentTotal = parseInt(panel.dataset.total || '0');
+            if (!initializedTotal || currentTotal !== dynTotal){
+              showProgress(dynTotal, `m=${data.m ?? ''} — exploring search space…`);
+              initializedTotal = true;
+            }
+            const label = `m=${data.m ?? '?'}  nodes: ${nodeSeen.toLocaleString()} (continuing…)`;
+            updateProgress(nodeSeen, label);
+            return;
+          }
+        }
+        if (kind === 'candidate'){
+          streamed.push(data);
           return;
         }
-        if (SUMMARY) SUMMARY.textContent = "Found " + results.length + " solution(s) (sorted by language score)";
-        const best = results[0];
-        const inv = (function(){
-          const invArr = new Array(26);
-          for (let L=0; L<26; L++) invArr[best.pos[L]] = String.fromCharCode(65+L);
-          return invArr.join("");
-        })();
+        if (kind === 'result' || kind === 'done'){
+          hideProgress();
+          if (BTN_STOP){
+            BTN_STOP.style.display = 'none';
+            BTN_STOP.disabled = true;
+          }
+          if (BTN_TEST) BTN_TEST.disabled = false;
+          try { uaWorker.terminate(); } catch(e){}
+          uaWorker = null;
 
-        // Compute actual keyword letters using inv alphabet
-        const keyResidues = best.key;
-        let keyLetters = "";
-        for (let i=0; i<best.k.length; i++){
-          const shift = best.k[i];
-          // shift is 0..25; in classical Vigenere it corresponds to A=0, B=1, ...
-          // But with custom alphabet mapping, we map via inv string
-          const letter = inv[(shift % 26 + 26) % 26];
-          keyLetters += letter;
+          const baseResults = Array.isArray(data.results) && data.results.length ? data.results : streamed;
+          if (!baseResults.length){
+            if (SUMMARY) SUMMARY.textContent = `No solution for key lengths ${payload.minK}..${payload.maxK} under this model.`;
+            return;
+          }
+          baseResults.sort((a,b)=> (b.score||0) - (a.score||0));
+          if (SUMMARY) SUMMARY.textContent = `Found ${baseResults.length} solution(s) for unknown alphabet Vigenère.`;
+          if (OUT) OUT.textContent = '';
+          const target = OUT || document.createElement('div');
+          const best = baseResults[0];
+          if (best && best.posRaw && best.kRaw){
+            const inv = new Array(26);
+            for (let L=0; L<26; L++){ inv[best.posRaw[L]] = String.fromCharCode(65+L); }
+            const alphaStr = inv.join('');
+            const block = document.createElement('pre');
+            block.textContent =
+              `Best candidate (m=${best.keyLength})\n` +
+              `key residues: ${best.key}\n` +
+              `alphabet:    ${alphaStr}\n\n` +
+              (best.full || '');
+            target.appendChild(block);
+          }
+          baseResults.slice(0,50).forEach((r, idx)=>{
+            const row = document.createElement('div'); row.className = 'row';
+            const head = document.createElement('div'); head.textContent = `#${idx+1}  m=${r.keyLength}  initialKey=${r.key}`;
+            const body = document.createElement('div'); body.className = 'small muted'; body.textContent = r.preview || '';
+            row.appendChild(head);
+            row.appendChild(body);
+            target.appendChild(row);
+          });
+          if (!OUT){
+            const container = $("out");
+            if (container) container.appendChild(target);
+          }
         }
-        let txt = "";
-        txt += "Best candidate (m=" + best.keyLength + ")\n";
-        txt += "key residues: " + best.key + "\n";
-        txt += "key (letters): " + keyLetters + "\n";
-        txt += "alphabet:    " + inv + "\n\n";
-        txt += best.full + "\n\n";
-        results.slice(1, Math.min(10, results.length)).forEach((r, i) => {
-          txt += "#" + (i+2) + " m=" + r.keyLength + " key=" + r.key + " score=" + r.score.toFixed(2) + "\n";
-          txt += r.preview + "\n\n";
-        });
-        if (OUT) OUT.textContent = txt;
-      }
-    };
-    uaWorker.onerror = (e) => {
-      if (SUMMARY) SUMMARY.textContent = "Worker error: " + (e && (e.message||e.filename||e.lineno) || "unknown");
-    };
-    uaWorker.postMessage({ cmd:"start", ...payload });
-  }
+      };
 
-  // Route 'Test cribs' to worker when mode is unknown alphabet
-  
-  if (BTN_STOP){
-    BTN_STOP.addEventListener("click", (ev)=>{
-      ev.preventDefault();
-      try { if (uaWorker) uaWorker.terminate(); } catch(_) {}
-      uaWorker = null;
-      if (SUMMARY) SUMMARY.textContent = "Search stopped.";
-      hideProgress();
-      if (BTN_TEST) BTN_TEST.disabled = false;
-      BTN_STOP.disabled = true;
-    });
-  }
+      uaWorker.onerror = (e) => {
+        const msg = e && (e.message || e.toString()) || 'unknown error';
+        stopWorker('Worker error (stopped).', 'Worker error: ' + msg);
+      };
 
-if (BTN_TEST){
-    BTN_TEST.addEventListener("click", (ev)=>{
-      if (SEL_OP && SEL_OP.value === "vig_custom_alpha"){
-        ev.stopImmediatePropagation();
+      uaWorker.postMessage({ cmd:'start', ...payload });
+    }
+
+    if (BTN_STOP){
+      BTN_STOP.addEventListener('click', (ev)=>{
         ev.preventDefault();
-        startWorkerSolve();
-      }
-    }, true);
-  }
-})();
-</script>
-
-
-<script>
-let UA_WORKER = null;
-
-function getCribMapFromDOM(){
-  const inputs = document.querySelectorAll('input.cribin');
-  const map = {};
-  inputs.forEach(inp => {
-    const pos = parseInt(inp.dataset.pos);
-    const v = (inp.value || '').toUpperCase();
-    map[pos] = v ? v : null;
-  });
-  return map;
-}
-
-async function testCribsWrapper(){
-  const op = document.getElementById('op').value;
-  if (op !== 'vig_custom_alpha'){
-    hideProgress();
-    return testCribs();
-  }
-
-  const stopBtn = document.getElementById('stopSearch');
-  const testBtn = document.getElementById('test');
-  const out = document.getElementById('out');
-  const summary = document.getElementById('summary');
-  const minK = parseInt(document.getElementById('minK').value);
-  const maxK = parseInt(document.getElementById('maxK').value);
-
-  stopBtn.style.display = 'inline-block';
-  stopBtn.disabled = false;
-  testBtn.disabled = true;
-  out.textContent='';
-  summary.textContent='Searching (worker)…';
-
-  const { letters } = gatherCribs();
-  const cribMap = getCribMapFromDOM();
-
-UA_WORKER.onmessage = (ev) => {
-  try {
-    const d = ev && ev.data ? ev.data : null;
-    if (d && d.kind === 'progress' && typeof d.candidatesFound === 'number') {
-      const el = document.getElementById('uaCandidatesCount');
-      if (el) el.textContent = String(d.candidatesFound);
-    }
-  } catch(_e){}
-
-    const d = ev.data || {}; UA_WORKER=null; }
-  UA_WORKER = new Worker(URL.createObjectURL(blob));
-
-  const streamed = [];
-  showProgress(1, 'Estimating search space…');
-  let initializedTotal = false;
-  let nodeSeen = 0; let dynTotal = 0;
-
-
-  UA_WORKER.onmessage = (ev) => {
-    const d = ev.data || {};
-    const kind = d.type || d.kind || d.event;
-    if (kind === 'progress' || kind === 'hint') {
-      // Protocol A: loop-level progress (done/total/label)
-      if ('total' in d && 'done' in d) {
-        const panel = ensureProgressPanel();
-        const totalNum = Math.max(1, d.total|0);
-        const currentTotal = parseInt(panel.dataset.total || '0');
-        if (!initializedTotal || currentTotal !== totalNum){
-          showProgress(totalNum, d.label || 'Working…');
-          initializedTotal = true;
-        }
-        updateProgress(d.done|0, d.label || '');
-        return;
-      }
-      // Protocol B: node-level progress (DFS hints), flatten nested payloads
-      const dfs = d.p && (d.p.kind === 'dfs') ? d.p : (kind==='dfs' ? d : null);
-      if (dfs && typeof dfs.nodes === 'number'){
-        nodeSeen = dfs.nodes|0;
-        // Keep the bar moving by extending total as we approach it
-        if (dynTotal < nodeSeen + 100) dynTotal = nodeSeen + 1000;
-        const panel = ensureProgressPanel();
-        const currentTotal = parseInt(panel.dataset.total || '0');
-        if (!initializedTotal || currentTotal !== dynTotal){
-          showProgress(dynTotal, `m=${d.m ?? ''} — exploring search space…`);
-          initializedTotal = true;
-        }
-        const label = `m=${d.m ?? '?'}  nodes: ${nodeSeen.toLocaleString()} (continuing…)`;
-        updateProgress(nodeSeen, label);
-        return;
-      }
-    }
-      const label = `m=${d.m}  nodes: ${ (d.nodesVisited||0).toLocaleString() } / ~${ d.estimatedMaxStr || d.estimatedMaxNum }  (total ≈ ${ (d.accNodes||0).toLocaleString() } / ~${ d.accMaxNum || 0 })`;
-      updateProgress(done, label);
-      return;
-    }
-    if (kind === 'candidate'){
-      streamed.push(d);
-      return;
-    }
-    if (kind === 'result' || kind === 'done'){
-      hideProgress();
-      stopBtn.style.display='none';
-      testBtn.disabled=false;
-      try { UA_WORKER.terminate(); } catch(e){} UA_WORKER=null;
-
-      const results = streamed.slice().sort((a,b)=>b.score-a.score);
-      if (!results.length){
-        summary.textContent = `No solution for key lengths ${minK}..${maxK} under this model.`;
-        return;
-      }
-      summary.textContent = `Found ${results.length} solution(s) for unknown alphabet Vigenère.`;
-      const best = results[0];
-      if (best && best.posRaw && best.kRaw){
-        const inv = new Array(26);
-        for (let L=0; L<26; L++){ inv[best.posRaw[L]] = String.fromCharCode(65+L); }
-        const alphaStr = inv.join('');
-        const fullBlock = document.createElement('pre');
-        fullBlock.textContent =
-          `Best candidate (m=${best.keyLength})\n` +
-          `key residues: ${best.key}\n` +
-          `alphabet:    ${alphaStr}\n\n` +
-          (best.full || '');
-        out.appendChild(fullBlock);
-      }
-      results.slice(0,50).forEach((r,idx)=>{
-        const div=document.createElement('div'); div.className='row';
-        const head=document.createElement('div'); head.textContent = `#${idx+1}  m=${r.keyLength}  keyResidues=${r.key}`;
-        const body=document.createElement('div'); body.className='small muted'; body.textContent=r.preview||'';
-        div.appendChild(head); div.appendChild(body); out.appendChild(div);
+        stopWorker('Search cancelled.');
       });
     }
-  };
 
-  UA_WORKER.onerror = (e) => {
-    hideProgress();
-    stopBtn.style.display='none';
-    testBtn.disabled=false;
-    out.textContent = 'Worker error: ' + (e.message || e.toString());
-  };
-
-  stopBtn.onclick = () => {
-    if (UA_WORKER){
-      try { UA_WORKER.postMessage({cmd:'cancel'}); } catch(e){}
-      try { UA_WORKER.terminate(); } catch(e){}
-      UA_WORKER=null;
+    if (BTN_TEST){
+      BTN_TEST.addEventListener('click', (ev)=>{
+        const op = SEL_OP ? SEL_OP.value : '';
+        if (op === 'vig_custom_alpha'){
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          startWorkerSolve();
+        } else if (op === 'autokey_custom_alpha'){
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          runUnknownAlphabetInline();
+        }
+      }, true);
     }
-    hideProgress();
-    stopBtn.style.display='none';
-    testBtn.disabled=false;
-    summary.textContent = 'Search cancelled.';
-  };
 
-  // Kick off
-  UA_WORKER.postMessage({ cmd:'start', letters: letters, cribMap: cribMap, minK, maxK });
-}
-
-// Wire the test button to the wrapper
-document.getElementById('test').removeEventListener('click', testCribs);
-document.getElementById('test').addEventListener('click', testCribsWrapper);
-
-// Toggle stop button visibility based on op
-(function(){
-  const opEl = document.getElementById('op');
-  const stopBtn = document.getElementById('stopSearch');
-  function updateVisibility(){
-    if (!stopBtn || !opEl) return;
-    stopBtn.style.display = (opEl.value === 'vig_custom_alpha') ? 'inline-block' : 'none';
-  }
-  if (opEl){
-    opEl.addEventListener('change', updateVisibility);
-    updateVisibility();
-  }
-})();
-</script>
+    if (SEL_OP){
+      SEL_OP.addEventListener('change', updateStopVisibility);
+      updateStopVisibility();
+    } else {
+      resetStop();
+    }
+  })();
+  </script>
 
 </body>
 </html>
