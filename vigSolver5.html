@@ -92,6 +92,9 @@
       <input id="quickTrialsInput" type="number" min="0" value="30" style="width:72px" />
       <label class="small muted">Trial depth:</label>
       <input id="trialDepthInput" type="number" min="0" value="3" style="width:72px" />
+      <label class="checkbox-row small" style="padding:0 6px 0 0">
+        <input type="checkbox" id="bruteBridgeNext" /> Enforce next crib
+      </label>
       <button id="bruteForce">Brute force cribs</button>
     </div>
     <div id="wordlistStatus" class="small muted" style="margin-top:8px">No wordlist loaded</div>
@@ -332,6 +335,45 @@ function gatherCribs(){
     cribMap[pos] = v || null;
   });
   return {letters, cribMap};
+}
+
+function cribLetterAt(cribMap, pos){
+  if (!cribMap) return null;
+  const raw = cribMap[pos];
+  if (!raw) return null;
+  const up = sanitize(typeof raw === 'string' ? raw : String(raw));
+  return up.length ? up[0] : null;
+}
+
+function findNextCribSegmentAfter(letters, cribMap, endStep){
+  if (!letters || !cribMap) return [];
+  const { absToLetterStep } = buildLetterStreams(letters);
+  const stepToAbs = [];
+  for (let i = 0; i < absToLetterStep.length; i++){
+    const step = absToLetterStep[i];
+    if (step >= 0){
+      stepToAbs[step] = i;
+    }
+  }
+  if (!Array.isArray(stepToAbs) || stepToAbs.length === 0) return [];
+  const segment = [];
+  for (let step = endStep + 1; step < stepToAbs.length; step++){
+    const abs = stepToAbs[step];
+    if (abs == null || abs < 0) continue;
+    const letter = cribLetterAt(cribMap, abs);
+    if (!letter) continue;
+    let pos = step;
+    while (pos < stepToAbs.length){
+      const absIdx = stepToAbs[pos];
+      if (absIdx == null || absIdx < 0) break;
+      const nextLetter = cribLetterAt(cribMap, absIdx);
+      if (!nextLetter) break;
+      segment.push({ step: pos, abs: absIdx, letter: nextLetter });
+      pos++;
+    }
+    break;
+  }
+  return segment;
 }
 
 function collectContiguousCribs(letters, cribMap){
@@ -764,6 +806,10 @@ function bruteForceWordlist(){
   const endPos = Math.max(selectionStart, selectionEnd);
   const selectionLength = endPos - startPos + 1;
 
+  const bridgeNextEl = document.getElementById('bruteBridgeNext');
+  const bridgeNext = bridgeNextEl ? !!bridgeNextEl.checked : false;
+  const nextSegmentLen = bridgeNext ? findNextCribSegmentAfter(letters, cribMap, endPos).length : 0;
+
   let maxResults = parseInt(document.getElementById('maxResults').value, 10);
   if (!Number.isFinite(maxResults) || maxResults <= 0){ maxResults = 20; }
   const minK = parseInt(document.getElementById('minK').value, 10);
@@ -776,7 +822,7 @@ function bruteForceWordlist(){
   const wrongLengthSkipped = wordlist.length - filtered.length;
 
   if (filtered.length === 0){
-    displayBruteResults([], startPos, endPos, 0, wrongLengthSkipped, 0, maxResults);
+    displayBruteResults([], startPos, endPos, 0, wrongLengthSkipped, 0, maxResults, { bridgeNext, nextSegmentLen });
     return;
   }
 
@@ -801,7 +847,8 @@ function bruteForceWordlist(){
     maxResults,
     quickTrials,
     trialDepth,
-    preSkipped: wrongLengthSkipped
+    preSkipped: wrongLengthSkipped,
+    bridgeNext: !!bridgeNext
   };
 
   if (typeof window !== 'undefined' && typeof window.__startBruteWorker === 'function'){
@@ -811,7 +858,10 @@ function bruteForceWordlist(){
   }
 }
 
-function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipped, totalCandidates, maxResults){
+function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipped, totalCandidates, maxResults, options){
+  const opts = options || {};
+  const bridgeNext = !!opts.bridgeNext;
+  const nextSegmentLen = (typeof opts.nextSegmentLen === 'number') ? opts.nextSegmentLen : undefined;
   const panel = document.getElementById('bruteResults');
   const summary = document.getElementById('bruteSummary');
   const out = document.getElementById('bruteOut');
@@ -820,7 +870,17 @@ function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipp
   const shown = results.length;
   const total = (typeof totalCandidates === 'number') ? totalCandidates : shown;
   const limit = (typeof maxResults === 'number' && !Number.isNaN(maxResults)) ? maxResults : shown;
-  summary.textContent = `Found ${total} consistent cribs at positions ${startPos}-${endPos}. Showing top ${shown} (limit ${limit}). Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words). Sorted by decryption quality.`;
+  let text = `Found ${total} consistent cribs at positions ${startPos}-${endPos}. Showing top ${shown} (limit ${limit}). Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words). Sorted by decryption quality.`;
+  if (bridgeNext){
+    if (nextSegmentLen === undefined){
+      text += ' Enforcing next crib segment (length pending).';
+    } else if (nextSegmentLen > 0){
+      text += ` Enforced next crib segment (${nextSegmentLen} letter${nextSegmentLen === 1 ? '' : 's'}).`;
+    } else {
+      text += ' Enforce-next-crib enabled, but no later crib segment was found to apply.';
+    }
+  }
+  summary.textContent = text;
 
   out.innerHTML = '';
   results.forEach((r, idx) => {
@@ -2303,6 +2363,42 @@ try{
           }
           return results;
         }
+        function cribLetterAt(cribMap, pos){
+          if (!cribMap) return null;
+          const raw = cribMap[pos];
+          if (!raw) return null;
+          const up = sanitize(typeof raw === 'string' ? raw : String(raw));
+          return up.length ? up[0] : null;
+        }
+        function findNextCribSegment(stepToAbs, cribMap, endStep){
+          if (!Array.isArray(stepToAbs)) return [];
+          for (let step = endStep + 1; step < stepToAbs.length; step++){
+            const abs = stepToAbs[step];
+            if (abs == null || abs < 0) continue;
+            const letter = cribLetterAt(cribMap, abs);
+            if (!letter) continue;
+            const segment = [];
+            let pos = step;
+            while (pos < stepToAbs.length){
+              const absIdx = stepToAbs[pos];
+              if (absIdx == null || absIdx < 0) break;
+              const nextLetter = cribLetterAt(cribMap, absIdx);
+              if (!nextLetter) break;
+              segment.push({ step: pos, abs: absIdx, letter: nextLetter });
+              pos++;
+            }
+            return segment;
+          }
+          return [];
+        }
+        function matchesNextSegment(text, segment){
+          if (!segment || !segment.length) return true;
+          for (const item of segment){
+            const ch = (text[item.abs] || '').toUpperCase();
+            if (ch !== item.letter) return false;
+          }
+          return true;
+        }
         function runBruteForce(msg){
           __cancelled = false;
           const letters = Array.isArray(msg.letters) ? msg.letters : [];
@@ -2338,6 +2434,9 @@ try{
           postMessage({ kind:'brute_progress', done:0, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
           const minKVal = Number.isFinite(minK) && minK > 0 ? minK : 1;
           const maxKVal = Number.isFinite(maxK) && maxK >= minKVal ? maxK : minKVal;
+          const enforceNext = !!msg.bridgeNext;
+          const nextSegment = enforceNext ? findNextCribSegment(stepToAbs, cribMap, endPos) : [];
+          const nextSegmentLen = nextSegment.length;
           for (let idx=0; idx<wordlist.length && !__cancelled; idx++){
             const raw = wordlist[idx];
             const word = sanitize(raw || '');
@@ -2371,6 +2470,7 @@ try{
                     const fullDec = (op === 'vig_custom_alpha')
                       ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
                       : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
+                    if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
                     const decLetters = sanitize(fullDec).split('');
                     const fitness = englishFitness(decLetters);
                     const inv = new Array(26);
@@ -2408,6 +2508,7 @@ try{
                   }
                   if (!consistent) continue;
                   const decrypted = applyVigenereDecrypt(letters, res.template);
+                  if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(decrypted, nextSegment)) continue;
                   const decLetters = sanitize(decrypted).split('');
                   const fitness = englishFitness(decLetters);
                   results.push({
@@ -2452,6 +2553,7 @@ try{
                         if (!isLetter(ch)){ outFull+=ch; }
                         else { outFull+= r.plaintext[kpos++] || '?'; }
                       }
+                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(outFull, nextSegment)) continue;
                       const decLetters = sanitize(outFull).split('');
                       const fitness = englishFitness(decLetters);
                       results.push({
@@ -2473,6 +2575,7 @@ try{
                         if (!isLetter(ch)){ outFull+=ch; }
                         else { outFull+= r.plaintext[kpos++] || '?'; }
                       }
+                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(outFull, nextSegment)) continue;
                       const decLetters = sanitize(outFull).split('');
                       const fitness = englishFitness(decLetters);
                       results.push({
@@ -2494,7 +2597,7 @@ try{
           }
           results.sort((a,b)=> (isFinite(b.fitness)?b.fitness:-Infinity) - (isFinite(a.fitness)?a.fitness:-Infinity));
           const limited = (maxResults && maxResults > 0) ? results.slice(0, maxResults) : results.slice();
-          postMessage({ kind:'brute_done', results: limited, totalCandidates: results.length, wordsChecked, wordsSkipped, startPos, endPos, maxResults, cancelled: __cancelled });
+          postMessage({ kind:'brute_done', results: limited, totalCandidates: results.length, wordsChecked, wordsSkipped, startPos, endPos, maxResults, cancelled: __cancelled, bridgeNext: enforceNext, nextSegmentLen });
         }
         onmessage = (ev)=>{
           const msg = ev.data||{};
@@ -2751,7 +2854,13 @@ try{
 
       if (!totalWords){
         if (BRUTE_PANEL) BRUTE_PANEL.style.display = 'block';
-        if (BRUTE_SUMMARY) BRUTE_SUMMARY.textContent = `No candidate words to test (skipped ${skippedPre} wrong-length).` ;
+        if (BRUTE_SUMMARY){
+          let text = `No candidate words to test (skipped ${skippedPre} wrong-length).`;
+          if (payload.bridgeNext){
+            text += ' Enforce-next-crib requested.';
+          }
+          BRUTE_SUMMARY.textContent = text;
+        }
         return;
       }
 
@@ -2761,7 +2870,8 @@ try{
         endPos: payload.endPos|0,
         maxResults: payload.maxResults,
         skippedPre,
-        totalWords
+        totalWords,
+        bridgeNext: !!payload.bridgeNext
       };
 
       if (BTN_BRUTE) BTN_BRUTE.disabled = true;
@@ -2772,7 +2882,11 @@ try{
       if (BRUTE_PANEL) BRUTE_PANEL.style.display = 'block';
       if (BRUTE_OUT) BRUTE_OUT.innerHTML = '';
       if (BRUTE_SUMMARY){
-        BRUTE_SUMMARY.textContent = `Running brute force on ${totalWords.toLocaleString()} word(s) (skipped ${skippedPre.toLocaleString()} wrong-length).`;
+        let text = `Running brute force on ${totalWords.toLocaleString()} word(s) (skipped ${skippedPre.toLocaleString()} wrong-length).`;
+        if (payload.bridgeNext){
+          text += ' Enforcing next crib segment.';
+        }
+        BRUTE_SUMMARY.textContent = text;
       }
 
       showProgress(Math.max(1, totalWords), 'Brute forcing wordlist…');
@@ -2797,7 +2911,11 @@ try{
           const label = data.label || `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words`;
           updateProgress(done, label);
           if (BRUTE_SUMMARY){
-            BRUTE_SUMMARY.textContent = `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words (skipped ${skipped.toLocaleString()}).`;
+            let text = `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words (skipped ${skipped.toLocaleString()}).`;
+            if (bruteCtx && bruteCtx.bridgeNext){
+              text += ' Enforcing next crib segment.';
+            }
+            BRUTE_SUMMARY.textContent = text;
           }
           return;
         }
@@ -2816,7 +2934,16 @@ try{
           const totalCandidates = typeof data.totalCandidates === 'number' ? data.totalCandidates : (Array.isArray(data.results) ? data.results.length : 0);
           const results = Array.isArray(data.results) ? data.results : [];
 
-          displayBruteResults(results, data.startPos, data.endPos, wordsChecked, wordsSkipped, totalCandidates, data.maxResults);
+          displayBruteResults(
+            results,
+            data.startPos,
+            data.endPos,
+            wordsChecked,
+            wordsSkipped,
+            totalCandidates,
+            data.maxResults,
+            { bridgeNext: !!data.bridgeNext, nextSegmentLen: typeof data.nextSegmentLen === 'number' ? data.nextSegmentLen : undefined }
+          );
           if (data.cancelled && BRUTE_SUMMARY){
             BRUTE_SUMMARY.textContent += ' (stopped early)';
           }
