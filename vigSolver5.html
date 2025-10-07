@@ -794,28 +794,62 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
     
     const cipherSeg = cLetters.slice(startPos, endPos + 1).join('');
     const plainSeg = word;
-    // Special fast path for unknown alphabet modes: propagation-only check across key lengths.
+    // Unknown alphabet modes: validate each candidate word across all lengths and surface full decrypts.
     if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
       const candidateCribMap = Object.assign({}, cribMap);
+      let conflict = false;
       for (let t = 0; t < word.length; t++) {
-  const letterStep = startPos + t;
-  const absPos = stepToAbs[letterStep];
-  if (absPos != null && isLetter(letters[absPos])) {
-    candidateCribMap[absPos] = word[t].toUpperCase();
-  }
-}
-      let possible = false;
+        const letterStep = startPos + t;
+        const absPos = stepToAbs[letterStep];
+        if (absPos != null && isLetter(letters[absPos])) {
+          const up = word[t].toUpperCase();
+          if (candidateCribMap[absPos] && candidateCribMap[absPos] !== up){
+            conflict = true;
+            break;
+          }
+          candidateCribMap[absPos] = up;
+        }
+      }
+      if (conflict) continue;
+
+      const solverOpts = {propagateOnly:true, quickTrials:getQuickTrials(), trialDepth:getTrialDepth()};
+      const viableLengths = [];
       for (let kk = minK; kk <= maxK; kk++){
         try{
-          const solverOpts = {propagateOnly:true, quickTrials:getQuickTrials(), trialDepth:getTrialDepth()};
           const ok = (op === 'vig_custom_alpha')
             ? solveVigUnknownAlphabet(letters, candidateCribMap, kk, solverOpts)
             : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, solverOpts);
-          if (ok){ possible = true; break; }
+          if (ok) viableLengths.push(kk);
         }catch(e){ /* ignore solver errors for this quick check */ }
       }
-      if (possible){
-        results.push({ word: word, keyLength: null, key: null, decrypted: null, fitness: null, possible: true, op: op });
+      if (!viableLengths.length) continue;
+
+      for (const kk of viableLengths){
+        try{
+          const sol = (op === 'vig_custom_alpha')
+            ? solveVigUnknownAlphabet(letters, candidateCribMap, kk)
+            : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk);
+          if (!sol || !sol.pos || !sol.k) continue;
+
+          const fullDec = (op === 'vig_custom_alpha')
+            ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
+            : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
+          const decLetters = sanitize(fullDec).split('');
+          const fitness = englishFitness(decLetters);
+          const inv = new Array(26);
+          for (let L = 0; L < 26; L++){ inv[sol.pos[L]] = A[L]; }
+          const alphaStr = inv.join('');
+
+          results.push({
+            word: word,
+            keyLength: kk,
+            key: sol.k.map(x => A[x]).join(''),
+            alphabet: alphaStr,
+            decrypted: fullDec,
+            fitness: fitness,
+            op: op
+          });
+        }catch(e){ /* ignore solver errors for this candidate */ }
       }
       continue; // move to next word
     }
@@ -996,16 +1030,21 @@ for (let __ai = 0; __ai < letters.length; __ai++) {
     }
   }
 
-  displayBruteResults(results.slice(0, maxResults), startPos, endPos, wordsChecked, wordsSkipped);
+  const totalCandidates = results.length;
+  const limited = results.slice(0, maxResults);
+  displayBruteResults(limited, startPos, endPos, wordsChecked, wordsSkipped, totalCandidates, maxResults);
 }
 
-function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipped){
+function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipped, totalCandidates, maxResults){
   const panel = document.getElementById('bruteResults');
   const summary = document.getElementById('bruteSummary');
   const out = document.getElementById('bruteOut');
 
   panel.style.display = 'block';
-  summary.textContent = `Found ${results.length} consistent cribs at positions ${startPos}-${endPos}. Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words). Sorted by decryption quality.`;
+  const shown = results.length;
+  const total = (typeof totalCandidates === 'number') ? totalCandidates : shown;
+  const limit = (typeof maxResults === 'number' && !Number.isNaN(maxResults)) ? maxResults : shown;
+  summary.textContent = `Found ${total} consistent cribs at positions ${startPos}-${endPos}. Showing top ${shown} (limit ${limit}). Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words). Sorted by decryption quality.`;
 
   out.innerHTML = '';
   results.forEach((r, idx) => {
