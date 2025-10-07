@@ -1260,6 +1260,11 @@ function solveVigUnknownAlphabet(letters, cribMap, m, options){
 function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
   const N = 26;
   if (!Number.isFinite(m) || m <= 0) return null;
+  const quickMode = !!(options && options.propagateOnly);
+  const bridgeChecks = Array.isArray(options && options.bridgeChecks) ? options.bridgeChecks : null;
+  const coverageOverride = options && options.coverage;
+  const coverageThresholds = options && options.coverageThresholds;
+  const enforceCoverage = options ? (options.coverageCheck !== false) : true;
   const segments = collectContiguousCribs(letters, cribMap);
   if (!segments.length) return null;
   const { absToLetterStep } = buildLetterStreams(letters);
@@ -1279,6 +1284,11 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
     }
   }
   if (!stepPlain.size) return null;
+
+  const coverage = coverageOverride || autokeyCoverageFromSteps(stepPlain, m);
+  if (enforceCoverage && !autokeyCoverageSufficient(coverage, coverageThresholds)){
+    return quickMode ? false : null;
+  }
 
   const constraints = [];
   const letterDeg = new Array(N).fill(0);
@@ -1302,6 +1312,14 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
     letterDeg[cSym]++;
   }
   if (!constraints.length) return null;
+
+  if (enforceCoverage){
+    for (let r=0; r<m; r++){
+      if ((keyDeg[r]|0) === 0){
+        return quickMode ? false : null;
+      }
+    }
+  }
 
   const pos = new Array(N).fill(null);
   const used = new Array(N).fill(false);
@@ -1328,6 +1346,32 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
       return {ok:true, changed:true};
     }
     return {ok: keyInit[idx] === value, changed:false};
+  }
+
+  function checkBridge(){
+    if (!bridgeChecks || !bridgeChecks.length) return true;
+    for (const bc of bridgeChecks){
+      const plainIdx = bc.plainSym;
+      const cipherIdx = bc.cipherSym;
+      if (plainIdx == null || cipherIdx == null) continue;
+      const plainPos = pos[plainIdx];
+      const cipherPos = pos[cipherIdx];
+      if (plainPos == null || cipherPos == null) continue;
+      let keyVal = null;
+      if (bc.step < m){
+        keyVal = keyInit[bc.step];
+      } else {
+        const depStep = bc.step - m;
+        const depSym = stepPlain.get(depStep);
+        if (depSym == null) continue;
+        const depPos = pos[depSym];
+        if (depPos == null) continue;
+        keyVal = depPos;
+      }
+      if (keyVal == null) continue;
+      if (mod(plainPos + keyVal) !== cipherPos) return false;
+    }
+    return true;
   }
 
   function propagate(){
@@ -1379,6 +1423,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
         }
       }
     }
+    if (!checkBridge()) return false;
     return true;
   }
 
@@ -1485,7 +1530,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
     return null;
   }
 
-  if (options && options.propagateOnly){
+  if (quickMode){
     return propagate();
   }
 
@@ -1570,6 +1615,58 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
     feedLinks,
     missingFeed: missing
   };
+}
+
+function autokeyCoverageFromSteps(stepPlain, m){
+  const coverage = {
+    totalSteps: stepPlain ? stepPlain.size : 0,
+    residues: Array.from({ length: Math.max(0, m|0) }, () => 0),
+    feedLinks: 0,
+    missingFeed: []
+  };
+  if (!stepPlain || typeof stepPlain.size !== 'number' || !Number.isFinite(m) || m <= 0){
+    return coverage;
+  }
+  const steps = Array.from(stepPlain.keys()).sort((a, b) => a - b);
+  for (const step of steps){
+    const r = step % m;
+    if (r >= 0 && r < coverage.residues.length){
+      coverage.residues[r]++;
+    }
+    if (step >= m){
+      coverage.feedLinks++;
+      if (!stepPlain.has(step - m)){
+        coverage.missingFeed.push({ step, dependsOn: step - m });
+      }
+    }
+  }
+  return coverage;
+}
+
+function autokeyCoverageSufficient(coverage, thresholds){
+  if (!coverage) return false;
+  if (!coverage.totalSteps) return false;
+  const opts = thresholds || {};
+  const requireResidues = opts.requireResidues !== false;
+  const minHits = Math.max(1, Number.isFinite(opts.minResidueHits) ? opts.minResidueHits|0 : 1);
+  if (requireResidues && Array.isArray(coverage.residues)){
+    for (const cnt of coverage.residues){
+      if (cnt < minHits) return false;
+    }
+  }
+  const maxMissing = (opts.maxMissingFeed != null) ? opts.maxMissingFeed : 0;
+  if (Array.isArray(coverage.missingFeed) && coverage.missingFeed.length > maxMissing){
+    return false;
+  }
+  if (opts.requireFeedLinks != null){
+    if (!Number.isFinite(opts.requireFeedLinks)){
+      return false;
+    }
+    if (coverage.feedLinks < opts.requireFeedLinks){
+      return false;
+    }
+  }
+  return true;
 }
 
 // ===== Non-destructive wrapper for Test button =====
@@ -1823,6 +1920,52 @@ try{
           }
           return segments;
         }
+        function autokeyCoverageFromSteps(stepPlain, m){
+          const coverage = {
+            totalSteps: stepPlain ? stepPlain.size : 0,
+            residues: Array.from({ length: Math.max(0, m|0) }, () => 0),
+            feedLinks: 0,
+            missingFeed: []
+          };
+          if (!stepPlain || typeof stepPlain.size !== 'number' || !Number.isFinite(m) || m <= 0){
+            return coverage;
+          }
+          const steps = Array.from(stepPlain.keys()).sort((a,b)=>a-b);
+          for (const step of steps){
+            const r = step % m;
+            if (r >= 0 && r < coverage.residues.length){
+              coverage.residues[r]++;
+            }
+            if (step >= m){
+              coverage.feedLinks++;
+              if (!stepPlain.has(step - m)){
+                coverage.missingFeed.push({ step, dependsOn: step - m });
+              }
+            }
+          }
+          return coverage;
+        }
+        function autokeyCoverageSufficient(coverage, thresholds){
+          if (!coverage) return false;
+          if (!coverage.totalSteps) return false;
+          const opts = thresholds || {};
+          const requireResidues = opts.requireResidues !== false;
+          const minHits = Math.max(1, Number.isFinite(opts.minResidueHits) ? opts.minResidueHits|0 : 1);
+          if (requireResidues && Array.isArray(coverage.residues)){
+            for (const cnt of coverage.residues){
+              if (cnt < minHits) return false;
+            }
+          }
+          const maxMissing = (opts.maxMissingFeed != null) ? opts.maxMissingFeed : 0;
+          if (Array.isArray(coverage.missingFeed) && coverage.missingFeed.length > maxMissing){
+            return false;
+          }
+          if (opts.requireFeedLinks != null){
+            if (!Number.isFinite(opts.requireFeedLinks)) return false;
+            if (coverage.feedLinks < opts.requireFeedLinks) return false;
+          }
+          return true;
+        }
         function englishFitness(upArr){
           const FREQ = {'E':12.0,'T':9.1,'A':8.2,'O':7.5,'I':7.0,'N':6.7,'S':6.3,'R':6.0,'H':6.1,'L':4.0,'D':4.3,'C':2.8,'U':2.8,'M':2.4,'F':2.2,'Y':2.0,'W':2.4,'G':2.0,'P':1.9,'B':1.5,'V':1.0,'K':0.8,'X':0.2,'Q':0.1,'J':0.15,'Z':0.07};
           const n = upArr.length||1;
@@ -1982,9 +2125,14 @@ try{
           }
           return out;
         }
-        function solveAutokeyUnknownAlphabet(letters, cribMap, m){
+        function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
           const N = 26;
           if (!Number.isFinite(m) || m <= 0) return null;
+          const quickMode = !!(options && options.propagateOnly);
+          const bridgeChecks = Array.isArray(options && options.bridgeChecks) ? options.bridgeChecks : null;
+          const coverageOverride = options && options.coverage;
+          const coverageThresholds = options && options.coverageThresholds;
+          const enforceCoverage = options ? (options.coverageCheck !== false) : true;
           const segments = collectContiguousCribs(letters, cribMap);
           if (!segments.length) return null;
           const { absToLetterStep } = buildLetterStreams(letters);
@@ -1997,13 +2145,18 @@ try{
               const step = startStep + t;
               const pSym = A2I[seg.plainSeg[t]];
               const cSym = A2I[seg.cipherSeg[t]];
-              if (stepPlain.has(step) && stepPlain.get(step) !== pSym) return null;
-              if (stepCipher.has(step) && stepCipher.get(step) !== cSym) return null;
+              if (stepPlain.has(step) && stepPlain.get(step) !== pSym) return quickMode ? false : null;
+              if (stepCipher.has(step) && stepCipher.get(step) !== cSym) return quickMode ? false : null;
               stepPlain.set(step, pSym);
               stepCipher.set(step, cSym);
             }
           }
-          if (!stepPlain.size) return null;
+          if (!stepPlain.size) return quickMode ? false : null;
+
+          const coverage = coverageOverride || autokeyCoverageFromSteps(stepPlain, m);
+          if (enforceCoverage && !autokeyCoverageSufficient(coverage, coverageThresholds)){
+            return quickMode ? false : null;
+          }
 
           const constraints = [];
           const letterDeg = new Array(N).fill(0);
@@ -2026,7 +2179,15 @@ try{
             letterDeg[pSym]++;
             letterDeg[cSym]++;
           }
-          if (!constraints.length) return null;
+          if (!constraints.length) return quickMode ? false : null;
+
+          if (enforceCoverage){
+            for (let r=0; r<m; r++){
+              if ((keyDeg[r]|0) === 0){
+                return quickMode ? false : null;
+              }
+            }
+          }
 
           const pos = new Array(N).fill(null);
           const used = new Array(N).fill(false);
@@ -2052,6 +2213,32 @@ try{
               return {ok:true, changed:true};
             }
             return {ok: keyInit[idx] === value, changed:false};
+          }
+
+          function checkBridge(){
+            if (!bridgeChecks || !bridgeChecks.length) return true;
+            for (const bc of bridgeChecks){
+              const plainIdx = bc.plainSym;
+              const cipherIdx = bc.cipherSym;
+              if (plainIdx == null || cipherIdx == null) continue;
+              const plainPos = pos[plainIdx];
+              const cipherPos = pos[cipherIdx];
+              if (plainPos == null || cipherPos == null) continue;
+              let keyVal = null;
+              if (bc.step < m){
+                keyVal = keyInit[bc.step];
+              } else {
+                const depStep = bc.step - m;
+                const depSym = stepPlain.get(depStep);
+                if (depSym == null) continue;
+                const depPos = pos[depSym];
+                if (depPos == null) continue;
+                keyVal = depPos;
+              }
+              if (keyVal == null) continue;
+              if (mod(plainPos + keyVal) !== cipherPos) return false;
+            }
+            return true;
           }
 
           function propagate(){
@@ -2103,6 +2290,7 @@ try{
                 }
               }
             }
+            if (!checkBridge()) return false;
             return true;
           }
 
@@ -2210,6 +2398,10 @@ try{
               }
             }
             return null;
+          }
+
+          if (quickMode){
+            return propagate();
           }
 
           return dfs();
@@ -2397,6 +2589,22 @@ try{
           }
           return true;
         }
+        function buildBridgeChecks(letters, segment){
+          if (!Array.isArray(segment) || !segment.length) return [];
+          const checks = [];
+          for (const item of segment){
+            if (!item || item.abs == null || item.abs < 0 || item.step == null) continue;
+            const cipherCh = letters[item.abs];
+            if (!isLetter(cipherCh)) continue;
+            const plainUp = (item.letter || '').toString().toUpperCase();
+            if (!plainUp || plainUp.length === 0) continue;
+            const plainSym = A2I[plainUp[0]];
+            const cipherSym = A2I[cipherCh.toUpperCase()];
+            if (!Number.isFinite(plainSym) || !Number.isFinite(cipherSym)) continue;
+            checks.push({ step: item.step, plainSym, cipherSym });
+          }
+          return checks;
+        }
         function runBruteForce(msg){
           __cancelled = false;
           const letters = Array.isArray(msg.letters) ? msg.letters : [];
@@ -2410,7 +2618,7 @@ try{
           const maxResults = msg.maxResults|0;
           const quickTrials = Number.isFinite(msg.quickTrials) ? Math.max(0, msg.quickTrials|0) : 30;
           const trialDepth = Number.isFinite(msg.trialDepth) ? Math.max(0, msg.trialDepth|0) : 3;
-          const quickOpts = { propagateOnly: true, quickTrials, trialDepth };
+          const quickBaseOpts = { propagateOnly: true, quickTrials, trialDepth };
           const cribPairs = Array.isArray(msg.cribPairs) ? msg.cribPairs : [];
           const cribMap = {};
           for (const pair of cribPairs){
@@ -2449,6 +2657,9 @@ try{
           const enforceNext = !!msg.bridgeNext;
           const nextSegment = enforceNext ? findNextCribSegment(stepToAbs, cribMap, endPos) : [];
           const nextSegmentLen = nextSegment.length;
+          const bridgeChecks = (op === 'autokey_custom_alpha' && enforceNext && nextSegmentLen > 0)
+            ? buildBridgeChecks(letters, nextSegment)
+            : [];
           for (let idx=0; idx<wordlist.length && !__cancelled; idx++){
             const raw = wordlist[idx];
             const word = sanitize(raw || '');
@@ -2458,6 +2669,18 @@ try{
                 postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
               }
               continue;
+            }
+            const seqNumber = wordsChecked + 1;
+            if (shouldReport(idx)){
+              const displayWord = word.length > 18 ? word.slice(0,17) + '…' : word;
+              postMessage({
+                kind:'brute_progress',
+                done: idx,
+                total: progressTotal,
+                checked: wordsChecked,
+                skipped: wordsSkipped,
+                label: `Checking ${displayWord} (${seqNumber}/${totalWords})`
+              });
             }
             wordsChecked++;
             if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
@@ -2476,11 +2699,15 @@ try{
                 const plausible = [];
                 for (let kk=minKVal; kk<=maxKVal && !__cancelled; kk++){
                   try {
-                    const quick = (op === 'vig_custom_alpha')
-                      ? solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickOpts)
-                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, quickOpts);
-                    if (quick){
-                      plausible.push(kk);
+                    if (op === 'vig_custom_alpha'){
+                      if (solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickBaseOpts)){
+                        plausible.push(kk);
+                      }
+                    } else {
+                      const quickOpts = bridgeChecks.length ? { ...quickBaseOpts, bridgeChecks } : quickBaseOpts;
+                      if (solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, quickOpts)){
+                        plausible.push(kk);
+                      }
                     }
                   } catch(e){}
                 }
@@ -2490,7 +2717,7 @@ try{
                   try {
                     const sol = (op === 'vig_custom_alpha')
                       ? solveVigUnknownAlphabet(letters, candidateCribMap, kk)
-                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk);
+                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, bridgeChecks.length ? { bridgeChecks } : undefined);
                     if (!sol || !sol.pos || !sol.k) continue;
                     const fullDec = (op === 'vig_custom_alpha')
                       ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
