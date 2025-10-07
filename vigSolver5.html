@@ -14,11 +14,11 @@
     .panel { background:var(--panel); border:1px solid rgba(255,255,255,0.06); padding:12px; border-radius:8px; margin-bottom:12px }
     textarea { width:100%; height:90px; font-family: monospace; font-size:14px; padding:8px; border-radius:6px; background:#071022; color:#dbeafe; border:1px solid rgba(255,255,255,0.08) }
     .grid { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px }
-    .cell { width:34px; text-align:center; position:relative }
+    .cell { width:34px; text-align:center; position:relative; display:flex; flex-direction:column; align-items:center; gap:4px }
     .cell.selecting { cursor:pointer }
     .cell.selected .char { background:#1e3a5f; border:2px solid var(--accent); }
-    .char { display:block; padding:6px 4px; background:#081426; border-radius:6px; font-weight:700; border:2px solid transparent; }
-    input.cribin { width:100%; text-align:center; border-radius:6px; padding:6px 4px; background:var(--input-bg); color:var(--input-ink); border:1px solid var(--input-bd); font-weight:700 }
+    .char { display:block; padding:6px 4px; background:#081426; border-radius:6px; font-weight:700; border:2px solid transparent; width:100%; box-sizing:border-box }
+    input.cribin { width:100%; text-align:center; border-radius:6px; padding:8px 4px; background:var(--input-bg); color:var(--input-ink); border:1px solid var(--input-bd); font-weight:700; box-sizing:border-box; font-size:18px; min-height:36px }
     input.cribin:focus { outline:2px solid var(--accent); outline-offset:0 }
     input.cribin[disabled]{ opacity:.35; cursor:not-allowed }
     .controls { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap }
@@ -39,6 +39,12 @@
     .score { color:var(--accent); font-weight:700 }
     .selection-info { background:#081426; padding:8px; border-radius:6px; margin-top:8px; display:none }
     .selection-info.active { display:block }
+    @media (max-width: 640px) {
+      .grid { gap:4px }
+      .cell { width:42px }
+      .char { font-size:16px; padding:6px 3px }
+      input.cribin { min-height:40px; font-size:20px; padding:10px 4px }
+    }
   </style>
 </head>
 <body>
@@ -86,6 +92,9 @@
       <input id="quickTrialsInput" type="number" min="0" value="30" style="width:72px" />
       <label class="small muted">Trial depth:</label>
       <input id="trialDepthInput" type="number" min="0" value="3" style="width:72px" />
+      <label class="checkbox-row small" style="padding:0 6px 0 0">
+        <input type="checkbox" id="bruteBridgeNext" /> Enforce next crib
+      </label>
       <button id="bruteForce">Brute force cribs</button>
     </div>
     <div id="wordlistStatus" class="small muted" style="margin-top:8px">No wordlist loaded</div>
@@ -263,19 +272,22 @@ function renderGrid(){
       
       // Selection mode click handler
       cell.addEventListener('click', (e) => {
-        if (!selectionMode) return;
-        e.stopPropagation();
-        
-        const clickedIdx = parseInt(cell.dataset.letterIdx);
-        
-        if (selectionStart === -1){
-          selectionStart = clickedIdx;
-          selectionEnd = clickedIdx;
-        } else {
-          selectionEnd = clickedIdx;
+        if (selectionMode){
+          e.stopPropagation();
+
+          const clickedIdx = parseInt(cell.dataset.letterIdx);
+
+          if (selectionStart === -1){
+            selectionStart = clickedIdx;
+            selectionEnd = clickedIdx;
+          } else {
+            selectionEnd = clickedIdx;
+          }
+
+          updateSelection();
+        } else if (!crib.disabled) {
+          crib.focus();
         }
-        
-        updateSelection();
       });
       
       crib.addEventListener('input', () => {
@@ -323,6 +335,45 @@ function gatherCribs(){
     cribMap[pos] = v || null;
   });
   return {letters, cribMap};
+}
+
+function cribLetterAt(cribMap, pos){
+  if (!cribMap) return null;
+  const raw = cribMap[pos];
+  if (!raw) return null;
+  const up = sanitize(typeof raw === 'string' ? raw : String(raw));
+  return up.length ? up[0] : null;
+}
+
+function findNextCribSegmentAfter(letters, cribMap, endStep){
+  if (!letters || !cribMap) return [];
+  const { absToLetterStep } = buildLetterStreams(letters);
+  const stepToAbs = [];
+  for (let i = 0; i < absToLetterStep.length; i++){
+    const step = absToLetterStep[i];
+    if (step >= 0){
+      stepToAbs[step] = i;
+    }
+  }
+  if (!Array.isArray(stepToAbs) || stepToAbs.length === 0) return [];
+  const segment = [];
+  for (let step = endStep + 1; step < stepToAbs.length; step++){
+    const abs = stepToAbs[step];
+    if (abs == null || abs < 0) continue;
+    const letter = cribLetterAt(cribMap, abs);
+    if (!letter) continue;
+    let pos = step;
+    while (pos < stepToAbs.length){
+      const absIdx = stepToAbs[pos];
+      if (absIdx == null || absIdx < 0) break;
+      const nextLetter = cribLetterAt(cribMap, absIdx);
+      if (!nextLetter) break;
+      segment.push({ step: pos, abs: absIdx, letter: nextLetter });
+      pos++;
+    }
+    break;
+  }
+  return segment;
 }
 
 function collectContiguousCribs(letters, cribMap){
@@ -751,252 +802,85 @@ function bruteForceWordlist(){
   }
 
   const {letters, cribMap} = gatherCribs();
-  const {cLetters, absToLetterStep} = buildLetterStreams(letters);
-  
-  
-// Build letterStep -> absolute index mapping once (for mapping cLetters indices back to raw letters indices)
-const stepToAbs = [];
-for (let __ai = 0; __ai < letters.length; __ai++) {
-  const __s = absToLetterStep[__ai];
-  if (__s >= 0) stepToAbs[__s] = __ai;
-}
-// Collect existing cribs from the grid (excluding the selection area)
-  const existingCribs = collectContiguousCribs(letters, cribMap);
-  
   const startPos = Math.min(selectionStart, selectionEnd);
   const endPos = Math.max(selectionStart, selectionEnd);
   const selectionLength = endPos - startPos + 1;
-  
-  const maxResults = parseInt(document.getElementById('maxResults').value);
-  const minK = parseInt(document.getElementById('minK').value);
-  const maxK = parseInt(document.getElementById('maxK').value);
+
+  const bridgeNextEl = document.getElementById('bruteBridgeNext');
+  const bridgeNext = bridgeNextEl ? !!bridgeNextEl.checked : false;
+  const nextSegmentLen = bridgeNext ? findNextCribSegmentAfter(letters, cribMap, endPos).length : 0;
+
+  let maxResults = parseInt(document.getElementById('maxResults').value, 10);
+  if (!Number.isFinite(maxResults) || maxResults <= 0){ maxResults = 20; }
+  const minK = parseInt(document.getElementById('minK').value, 10);
+  const maxK = parseInt(document.getElementById('maxK').value, 10);
   const op = document.getElementById('op').value;
+  const quickTrials = getQuickTrials();
+  const trialDepth = getTrialDepth();
 
-  const results = [];
-  let wordsChecked = 0;
-  let wordsSkipped = 0;
+  const filtered = wordlist.filter(w => w.length === selectionLength);
+  const wrongLengthSkipped = wordlist.length - filtered.length;
 
-  for (const word of wordlist){
-    if (word.length !== selectionLength) {
-      wordsSkipped++;
-      continue;
+  if (filtered.length === 0){
+    displayBruteResults([], startPos, endPos, 0, wrongLengthSkipped, 0, maxResults, { bridgeNext, nextSegmentLen });
+    return;
+  }
+
+  const cribPairs = [];
+  Object.entries(cribMap).forEach(([pos, val]) => {
+    const clean = sanitize(typeof val === 'string' ? val : '');
+    if (clean && clean.length > 0){
+      cribPairs.push([parseInt(pos, 10), clean[0]]);
     }
-    wordsChecked++;
-    
-    const cipherSeg = cLetters.slice(startPos, endPos + 1).join('');
-    const plainSeg = word;
-    // Special fast path for unknown alphabet modes: propagation-only check across key lengths.
-    if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
-      const candidateCribMap = Object.assign({}, cribMap);
-      for (let t = 0; t < word.length; t++) {
-  const letterStep = startPos + t;
-  const absPos = stepToAbs[letterStep];
-  if (absPos != null && isLetter(letters[absPos])) {
-    candidateCribMap[absPos] = word[t].toUpperCase();
+  });
+
+  const payload = {
+    letters,
+    cribPairs,
+    wordlist: filtered,
+    startPos,
+    endPos,
+    selectionLength,
+    minK,
+    maxK,
+    op,
+    maxResults,
+    quickTrials,
+    trialDepth,
+    preSkipped: wrongLengthSkipped,
+    bridgeNext: !!bridgeNext
+  };
+
+  if (typeof window !== 'undefined' && typeof window.__startBruteWorker === 'function'){
+    window.__startBruteWorker(payload);
+  } else {
+    console.warn('Brute-force worker controller unavailable.');
   }
 }
-      let possible = false;
-      for (let kk = minK; kk <= maxK; kk++){
-        try{
-          const solverOpts = {propagateOnly:true, quickTrials:getQuickTrials(), trialDepth:getTrialDepth()};
-          const ok = (op === 'vig_custom_alpha')
-            ? solveVigUnknownAlphabet(letters, candidateCribMap, kk, solverOpts)
-            : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, solverOpts);
-          if (ok){ possible = true; break; }
-        }catch(e){ /* ignore solver errors for this quick check */ }
-      }
-      if (possible){
-        results.push({ word: word, keyLength: null, key: null, decrypted: null, fitness: null, possible: true, op: op });
-      }
-      continue; // move to next word
-    }
 
-    for (let k = minK; k <= maxK; k++){
-      if (op === 'vigenere'){
-        const res = solveCribVigenere(cipherSeg, plainSeg, k, startPos);
-        if (!res.ok) continue;
-
-        // Check consistency with existing cribs
-        let consistent = true;
-        for (const existingCrib of existingCribs){
-          const letterStartPos = absToLetterStep[existingCrib.start];
-          const checkRes = solveCribVigenere(existingCrib.cipherSeg, existingCrib.plainSeg, k, letterStartPos);
-          if (!checkRes.ok) {
-            consistent = false;
-            break;
-          }
-          // Check if key templates are compatible
-          for (let i = 0; i < k; i++){
-            if (res.template[i] !== null && checkRes.template[i] !== null && res.template[i] !== checkRes.template[i]){
-              consistent = false;
-              break;
-            }
-          }
-          if (!consistent) break;
-        }
-        if (!consistent) continue;
-
-        const decrypted = applyVigenereDecrypt(letters, res.template);
-        const decLetters = sanitize(decrypted).split('');
-        const fitness = englishFitness(decLetters);
-        
-        results.push({
-          word: word,
-          keyLength: k,
-          key: res.template.map(x => x===null ? '?' : A[x]).join(''),
-          decrypted: decrypted,
-          fitness: fitness,
-          op: 'vigenere'
-        });
-      } else if (op === 'vig_sub' || op === 'vig_sub_post'){
-        const constraints = [];
-        for (let t=0; t<word.length; t++){
-          constraints.push({
-            pos: startPos + t,
-            cIdx: A2I[cipherSeg[t]],
-            pIdx: A2I[plainSeg[t]]
-          });
-        }
-        
-        // Add existing cribs as constraints
-        for (const existingCrib of existingCribs){
-          let letterIdx = -1;
-          for (let i = 0, seen = 0; i < letters.length; i++){
-            if (isLetter(letters[i])){
-              if (i === existingCrib.start){
-                letterIdx = seen;
-                break;
-              }
-              seen++;
-            }
-          }
-          if (letterIdx >= 0){
-            for (let t = 0; t < existingCrib.cipherSeg.length; t++){
-              const pos = letterIdx + t;
-              const cIdx = A2I[existingCrib.cipherSeg[t]];
-              const pIdx = A2I[existingCrib.plainSeg[t]];
-              constraints.push({pos, cIdx, pIdx});
-            }
-          }
-        }
-
-        if (op === 'vig_sub'){
-          const det = solveMASVigDeterministic(cLetters, constraints, k, k);
-          if (det.length > 0){
-            const r = det[0];
-            let outFull=''; let kpos=0; 
-            for (let i=0;i<letters.length;i++){ 
-              const ch=letters[i]; 
-              if (!isLetter(ch)){ outFull+=ch; } 
-              else { outFull+= r.plaintext[kpos++]; } 
-            }
-            const decLetters = sanitize(outFull).split('');
-            const fitness = englishFitness(decLetters);
-            
-            results.push({
-              word: word,
-              keyLength: k,
-              key: r.key.map(v=>A[v]).join(''),
-              decrypted: outFull,
-              fitness: fitness,
-              op: 'vig_sub'
-            });
-          }
-        } else {
-          const det = solveCipherSubDeterministic(cLetters, constraints, k, k);
-          if (det.length > 0){
-            const r = det[0];
-            let outFull=''; let kpos=0; 
-            for (let i=0;i<letters.length;i++){ 
-              const ch=letters[i]; 
-              if (!isLetter(ch)){ outFull+=ch; } 
-              else { outFull+= r.plaintext[kpos++]; } 
-            }
-            const decLetters = sanitize(outFull).split('');
-            const fitness = englishFitness(decLetters);
-            
-            results.push({
-              word: word,
-              keyLength: k,
-              key: r.key.map(v=>A[v]).join(''),
-              decrypted: outFull,
-              fitness: fitness,
-              op: 'vig_sub_post'
-            });
-          }
-        }
-      }
-    }
-  }
-
-  results.sort((a, b) => b.fitness - a.fitness);
-  
-  // If unknown alphabet mode and we only found a small set of possible words, expand them fully.
-  if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha') {
-    const SMALL_THRESHOLD = 25;
-    const possible = results.filter(r => r.op === op && r.possible === true);
-    if (possible.length > 0 && possible.length < SMALL_THRESHOLD) {
-      const expanded = [];
-      for (const cand of possible) {
-        // Rebuild candidate crib map with this word
-        const candidateCribMap = Object.assign({}, cribMap);
-        for (let t = 0; t < selectionLength; t++) {
-  const letterStep = startPos + t;
-  const absPos = stepToAbs[letterStep];
-  if (absPos != null && isLetter(letters[absPos])) {
-    candidateCribMap[absPos] = cand.word[t].toUpperCase();
-  }
-}
-        for (let kk=minK; kk<=maxK; kk++){
-          try{
-            const sol = (op === 'vig_custom_alpha')
-              ? solveVigUnknownAlphabet(letters, candidateCribMap, kk)
-              : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk);
-            if (sol && sol.pos && sol.k) {
-              const fullDec = (op === 'vig_custom_alpha')
-                ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
-                : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
-              const decLetters = sanitize(fullDec).split('');
-              const fitness = englishFitness(decLetters);
-              // Build alphabet string from pos[]
-              const inv = new Array(26);
-              for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
-              const alphaStr = inv.join('');
-              expanded.push({
-                word: cand.word,
-                keyLength: kk,
-                key: sol.k.map(x=>A[x]).join(''),
-                alphabet: alphaStr,
-                decrypted: fullDec,
-                fitness: fitness,
-                op: op + '_full'
-              });
-            }
-          }catch(e){ /* ignore, continue */ }
-        }
-      }
-      // Prefer expanded results if we got any; otherwise fall back to the quick possibles
-      if (expanded.length) {
-        // Merge with any non-unknown results we computed (e.g., other ops)
-        const nonUnknown = results.filter(r => r.op !== op);
-        const merged = nonUnknown.concat(expanded);
-        merged.sort((a,b)=> (isFinite(b.fitness)?b.fitness:-1) - (isFinite(a.fitness)?a.fitness:-1));
-        results.length = 0;
-        for (const x of merged) results.push(x);
-      }
-    }
-  }
-
-  displayBruteResults(results.slice(0, maxResults), startPos, endPos, wordsChecked, wordsSkipped);
-}
-
-function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipped){
+function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipped, totalCandidates, maxResults, options){
+  const opts = options || {};
+  const bridgeNext = !!opts.bridgeNext;
+  const nextSegmentLen = (typeof opts.nextSegmentLen === 'number') ? opts.nextSegmentLen : undefined;
   const panel = document.getElementById('bruteResults');
   const summary = document.getElementById('bruteSummary');
   const out = document.getElementById('bruteOut');
 
   panel.style.display = 'block';
-  summary.textContent = `Found ${results.length} consistent cribs at positions ${startPos}-${endPos}. Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words). Sorted by decryption quality.`;
+  const shown = results.length;
+  const total = (typeof totalCandidates === 'number') ? totalCandidates : shown;
+  const limit = (typeof maxResults === 'number' && !Number.isNaN(maxResults)) ? maxResults : shown;
+  let text = `Found ${total} consistent cribs at positions ${startPos}-${endPos}. Showing top ${shown} (limit ${limit}). Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words). Sorted by decryption quality.`;
+  if (bridgeNext){
+    if (nextSegmentLen === undefined){
+      text += ' Enforcing next crib segment (length pending).';
+    } else if (nextSegmentLen > 0){
+      text += ` Enforced next crib segment (${nextSegmentLen} letter${nextSegmentLen === 1 ? '' : 's'}).`;
+    } else {
+      text += ' Enforce-next-crib enabled, but no later crib segment was found to apply.';
+    }
+  }
+  summary.textContent = text;
 
   out.innerHTML = '';
   results.forEach((r, idx) => {
@@ -1870,8 +1754,14 @@ try{
     const OUT      = $("out");
     const SUMMARY  = $("summary");
     const CAND_CNT = $("uaCandidatesCount");
+    const BTN_BRUTE = $("bruteForce");
+    const BRUTE_PANEL = $("bruteResults");
+    const BRUTE_SUMMARY = $("bruteSummary");
+    const BRUTE_OUT = $("bruteOut");
 
     let uaWorker = null;
+    let currentJob = null;
+    let bruteCtx = null;
 
     function gatherForWorker(){
       const letters = ($("ctext") ? $("ctext").value : "").split("");
@@ -1882,15 +1772,19 @@ try{
         if (!v) return;
         const pos = parseInt(inp.dataset.pos);
         if (!Number.isFinite(pos)) return;
-        cribPairs.push([pos, v]);
+        const letter = v[0];
+        if (!letter) return;
+        cribPairs.push([pos, letter]);
       });
       const minK = $("minK") ? parseInt($("minK").value) : 2;
       const maxK = $("maxK") ? parseInt($("maxK").value) : 20;
-      return { letters, cribPairs, minK, maxK };
+      const op = SEL_OP ? SEL_OP.value : '';
+      return { letters, cribPairs, minK, maxK, op };
     }
 
     function makeWorker(){
       const src = `let __candsFound = 0;
+        let __cancelled = false;
 
         const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
         const A2I = {}; for (let i=0;i<26;i++) A2I[A[i]] = i;
@@ -2089,26 +1983,687 @@ try{
           }
           return out;
         }
+        function solveAutokeyUnknownAlphabet(letters, cribMap, m){
+          const N = 26;
+          if (!Number.isFinite(m) || m <= 0) return null;
+          const segments = collectContiguousCribs(letters, cribMap);
+          if (!segments.length) return null;
+          const { absToLetterStep } = buildLetterStreams(letters);
+          const stepPlain = new Map();
+          const stepCipher = new Map();
+          for (const seg of segments){
+            const startStep = absToLetterStep[seg.start];
+            if (startStep == null || startStep < 0) continue;
+            for (let t=0; t<seg.cipherSeg.length; t++){
+              const step = startStep + t;
+              const pSym = A2I[seg.plainSeg[t]];
+              const cSym = A2I[seg.cipherSeg[t]];
+              if (stepPlain.has(step) && stepPlain.get(step) !== pSym) return null;
+              if (stepCipher.has(step) && stepCipher.get(step) !== cSym) return null;
+              stepPlain.set(step, pSym);
+              stepCipher.set(step, cSym);
+            }
+          }
+          if (!stepPlain.size) return null;
+
+          const constraints = [];
+          const letterDeg = new Array(N).fill(0);
+          const keyDeg = new Array(m).fill(0);
+          const steps = Array.from(stepPlain.keys()).sort((a,b)=>a-b);
+          for (const step of steps){
+            const pSym = stepPlain.get(step);
+            const cSym = stepCipher.get(step);
+            if (pSym == null || cSym == null) continue;
+            if (step < m){
+              constraints.push({ type:'init', idx:step, pSym, cSym });
+              keyDeg[step]++;
+            }
+            const depStep = step - m;
+            if (depStep >= 0 && stepPlain.has(depStep)){
+              const depSym = stepPlain.get(depStep);
+              constraints.push({ type:'feed', idx:step, pSym, cSym, depSym });
+              letterDeg[depSym]++;
+            }
+            letterDeg[pSym]++;
+            letterDeg[cSym]++;
+          }
+          if (!constraints.length) return null;
+
+          const pos = new Array(N).fill(null);
+          const used = new Array(N).fill(false);
+          const keyInit = new Array(m).fill(null);
+          const mod = (x)=>((x%N)+N)%N;
+
+          function assignLetter(idx, value){
+            if (idx == null) return {ok:true, changed:false};
+            value = mod(value);
+            if (pos[idx] === null){
+              if (used[value]) return {ok:false, changed:false};
+              pos[idx] = value;
+              used[value] = true;
+              return {ok:true, changed:true};
+            }
+            return {ok: pos[idx] === value, changed:false};
+          }
+
+          function assignKey(idx, value){
+            value = mod(value);
+            if (keyInit[idx] === null){
+              keyInit[idx] = value;
+              return {ok:true, changed:true};
+            }
+            return {ok: keyInit[idx] === value, changed:false};
+          }
+
+          function propagate(){
+            let changed = true;
+            while (changed){
+              changed = false;
+              for (const cons of constraints){
+                if (cons.type === 'init'){
+                  const a = pos[cons.pSym];
+                  const b = pos[cons.cSym];
+                  const keyVal = keyInit[cons.idx];
+                  if (a !== null && b !== null){
+                    const res = assignKey(cons.idx, b - a);
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                  if (a !== null && keyVal !== null){
+                    const res = assignLetter(cons.cSym, a + keyVal);
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                  if (b !== null && keyVal !== null){
+                    const res = assignLetter(cons.pSym, b - keyVal);
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                } else {
+                  const a = pos[cons.pSym];
+                  const b = pos[cons.cSym];
+                  const dep = pos[cons.depSym];
+                  if (a !== null && dep !== null){
+                    const res = assignLetter(cons.cSym, a + dep);
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                  const bNow = pos[cons.cSym];
+                  const aNow = pos[cons.pSym];
+                  const depNow = pos[cons.depSym];
+                  if (bNow !== null && aNow !== null){
+                    const res = assignLetter(cons.depSym, bNow - aNow);
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                  if (bNow !== null && depNow !== null){
+                    const res = assignLetter(cons.pSym, bNow - depNow);
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                }
+              }
+            }
+            return true;
+          }
+
+          function chooseVar(){
+            let bestLetter=-1, bestScore=-1;
+            for (let L=0; L<N; L++){
+              if (pos[L]===null && letterDeg[L]>bestScore){
+                bestScore = letterDeg[L];
+                bestLetter = L;
+              }
+            }
+            if (bestLetter !== -1 && bestScore>0) return {type:'letter', idx:bestLetter};
+            let bestKey=-1, bestKeyScore=-1;
+            for (let i=0;i<m;i++){
+              if (keyInit[i]===null && keyDeg[i]>bestKeyScore){
+                bestKeyScore = keyDeg[i];
+                bestKey = i;
+              }
+            }
+            if (bestLetter !== -1) return {type:'letter', idx:bestLetter};
+            if (bestKey !== -1) return {type:'key', idx:bestKey};
+            return null;
+          }
+
+          function snapshot(){
+            return { pos: pos.slice(), used: used.slice(), key: keyInit.slice() };
+          }
+          function restore(state){
+            for (let i=0;i<N;i++){ pos[i]=state.pos[i]; used[i]=state.used[i]; }
+            for (let i=0;i<m;i++){ keyInit[i]=state.key[i]; }
+          }
+
+          function dfs(){
+            if (__cancelled) return null;
+            if (!propagate()) return null;
+            const sel = chooseVar();
+            if (!sel){
+              const posFull = pos.slice();
+              const free = [];
+              for (let v=0; v<N; v++){ if (!used[v]) free.push(v); }
+              for (let L=0; L<N; L++){ if (posFull[L]===null) posFull[L] = free.shift(); }
+              const keyFull = keyInit.slice().map(x => x===null ? 0 : mod(x));
+              return { pos: posFull, k: keyFull };
+            }
+            if (sel.type === 'letter'){
+              const candSet = new Set();
+              for (const cons of constraints){
+                if (cons.pSym === sel.idx){
+                  if (cons.type === 'init'){
+                    const b = pos[cons.cSym];
+                    const keyVal = keyInit[cons.idx];
+                    if (b !== null && keyVal !== null) candSet.add(mod(b - keyVal));
+                  } else {
+                    const b = pos[cons.cSym];
+                    const dep = pos[cons.depSym];
+                    if (b !== null && dep !== null) candSet.add(mod(b - dep));
+                  }
+                }
+                if (cons.cSym === sel.idx){
+                  if (cons.type === 'init'){
+                    const a = pos[cons.pSym];
+                    const keyVal = keyInit[cons.idx];
+                    if (a !== null && keyVal !== null) candSet.add(mod(a + keyVal));
+                  } else {
+                    const a = pos[cons.pSym];
+                    const dep = pos[cons.depSym];
+                    if (a !== null && dep !== null) candSet.add(mod(a + dep));
+                  }
+                }
+                if (cons.type === 'feed' && cons.depSym === sel.idx){
+                  const a = pos[cons.pSym];
+                  const b = pos[cons.cSym];
+                  if (b !== null && a !== null) candSet.add(mod(b - a));
+                }
+              }
+              const free = [];
+              for (let v=0; v<N; v++){ if (!used[v]) free.push(v); }
+              const candidates = candSet.size ? Array.from(candSet).filter(v => !used[v]) : free;
+              for (const val of candidates){
+                if (__cancelled) return null;
+                const snap = snapshot();
+                const vv = mod(val);
+                pos[sel.idx] = vv;
+                used[vv] = true;
+                const res = dfs();
+                if (res) return res;
+                restore(snap);
+              }
+            } else {
+              const candSet = new Set();
+              for (const cons of constraints){
+                if (cons.type === 'init' && cons.idx === sel.idx){
+                  const a = pos[cons.pSym];
+                  const b = pos[cons.cSym];
+                  if (a !== null && b !== null) candSet.add(mod(b - a));
+                }
+              }
+              const candidates = candSet.size ? Array.from(candSet) : [...Array(N).keys()];
+              for (const val of candidates){
+                if (__cancelled) return null;
+                const snap = snapshot();
+                keyInit[sel.idx] = mod(val);
+                const res = dfs();
+                if (res) return res;
+                restore(snap);
+              }
+            }
+            return null;
+          }
+
+          return dfs();
+        }
+        function decryptAutokeyUnknownAlphabet(letters, pos, keyInit){
+          const N = 26;
+          const inv = new Array(N); for (let L=0; L<N; L++) inv[pos[L]] = String.fromCharCode(65+L);
+          const plainPositions = [];
+          let step = 0;
+          let out = '';
+          for (let i=0; i<letters.length; i++){
+            const ch = letters[i];
+            if (!isLetter(ch)){ out += ch; continue; }
+            const cIdx = pos[ch.toUpperCase().charCodeAt(0)-65];
+            let keyVal;
+            if (step < keyInit.length){
+              keyVal = keyInit[step];
+            } else {
+              keyVal = plainPositions[step - keyInit.length];
+            }
+            if (keyVal == null) keyVal = 0;
+            keyVal = ((keyVal % N) + N) % N;
+            const pIdx = ((cIdx - keyVal) % N + N) % N;
+            plainPositions.push(pIdx);
+            out += inv[pIdx];
+            step++;
+          }
+          return out;
+        }
+        function solveCribVigenere(cipherSeg, plainSeg, keylen, letterStartPos){
+          const tpl = Array(keylen).fill(null);
+          for (let t=0; t<cipherSeg.length; t++){
+            const c = A2I[cipherSeg[t]];
+            const p = A2I[plainSeg[t]];
+            const kpos = (letterStartPos + t) % keylen;
+            const need = ((c - p) % 26 + 26) % 26;
+            if (tpl[kpos] === null) tpl[kpos] = need;
+            else if (tpl[kpos] !== need) return { ok:false, template:null };
+          }
+          return { ok:true, template: tpl };
+        }
+        function applyVigenereDecrypt(letters, template){
+          const keylen = template.length;
+          let out = '';
+          let step = 0;
+          for (let i=0; i<letters.length; i++){
+            const ch = letters[i];
+            if (!isLetter(ch)){ out += ch; continue; }
+            const c = A2I[ch.toUpperCase()];
+            const kv = template[step % keylen];
+            let pCh = '?';
+            if (kv !== null){
+              const p = ((c - kv) % 26 + 26) % 26;
+              pCh = A[p];
+            }
+            out += pCh;
+            step++;
+          }
+          return out;
+        }
+        function solveMASVigDeterministic(cLetters, constraints, minK, maxK){
+          const results=[];
+          function fillPerm(p){ const used=new Set(p.filter(v=>v!==null)); const rem=[]; for(let v=0; v<26; v++) if(!used.has(v)) rem.push(v); const out=p.slice(); for(let i=0;i<26;i++){ if(out[i]===null) out[i]=rem.shift(); } return out; }
+          function invertPerm(p){ const inv=new Array(26); for(let i=0;i<26;i++){ inv[p[i]] = i; } return inv; }
+          for (let m=minK; m<=maxK; m++){
+            const s = new Array(26).fill(null);
+            const k = new Array(m).fill(null);
+            const cons = constraints.map(o=>({ r: o.pos % m, cIdx:o.cIdx, pIdx:o.pIdx }));
+            function propagate(){
+              let changed=true;
+              while (changed){
+                changed=false;
+                for (const {r,cIdx,pIdx} of cons){
+                  if (k[r]!==null && s[pIdx]===null){ const val=((cIdx - k[r])%26+26)%26; if (s[pIdx]===null){ s[pIdx]=val; changed=true; } else if (s[pIdx]!==val){ return false; } }
+                  if (s[pIdx]!==null && k[r]===null){ const val=((cIdx - s[pIdx])%26+26)%26; if (k[r]===null){ k[r]=val; changed=true; } else if (k[r]!==val){ return false; } }
+                  if (s[pIdx]!==null && k[r]!==null){ if ( ((cIdx - s[pIdx])%26+26)%26 !== k[r]) return false; }
+                }
+                const seen=new Set();
+                for (let i=0;i<26;i++){ const v=s[i]; if (v===null) continue; if (seen.has(v)) return false; seen.add(v); }
+              }
+              return true;
+            }
+            function dfs(){
+              if (!propagate()) return null;
+              if (k.every(v=>v!==null)) return {s:s.slice(), k:k.slice()};
+              const counts = new Array(m).fill(0); cons.forEach(({r})=>counts[r]++);
+              let rr = -1, best=-1;
+              for (let r=0;r<m;r++){ if (k[r]===null && counts[r]>best){best=counts[r]; rr=r;} }
+              if (rr<0) return {s:s.slice(), k:k.slice()};
+              let cand = null;
+              for (const {r,cIdx,pIdx} of cons){ if (r===rr && s[pIdx]!==null){ cand = [ ((cIdx - s[pIdx])%26+26)%26 ]; break; } }
+              if (!cand){ cand = [...Array(26).keys()]; }
+              for (const val of cand){
+                const old = k[rr]; k[rr]=val;
+                const res = dfs(); if (res) return res;
+                k[rr]=old;
+              }
+              return null;
+            }
+            const sol = dfs();
+            if (sol){
+              const S = fillPerm(sol.s);
+              const Sinv = invertPerm(S);
+              const dec = [];
+              for (let i=0;i<cLetters.length;i++){ const c=A2I[cLetters[i]]; const p = Sinv[ ((c - sol.k[i % m])%26+26)%26 ]; dec.push(A[p]); }
+              results.push({m, key:sol.k, subInv:Sinv, plaintext:dec.join('')});
+            }
+          }
+          return results.sort((a,b)=>b.plaintext.length-a.plaintext.length);
+        }
+        function solveCipherSubDeterministic(cLetters, constraints, minK, maxK){
+          const results=[];
+          function fillPerm(p){ const used=new Set(p.filter(v=>v!==null)); const rem=[]; for(let v=0; v<26; v++) if(!used.has(v)) rem.push(v); const out=p.slice(); for(let i=0;i<26;i++){ if(out[i]===null) out[i]=rem.shift(); } return out; }
+          for (let m=minK; m<=maxK; m++){
+            const pMap = new Array(26).fill(null);
+            const k = new Array(m).fill(null);
+            const cons = constraints.map(o=>({ r:o.pos % m, cIdx:o.cIdx, pIdx:o.pIdx }));
+            function propagate(){
+              let changed=true;
+              while (changed){
+                changed=false;
+                for (const {r,cIdx,pIdx} of cons){
+                  if (k[r]!==null && pMap[cIdx]===null){ const val=((pIdx + k[r])%26+26)%26; if (pMap[cIdx]===null){ pMap[cIdx]=val; changed=true; } else if (pMap[cIdx]!==val){ return false; } }
+                  if (pMap[cIdx]!==null && k[r]===null){ const val=((pMap[cIdx] - pIdx)%26+26)%26; if (k[r]===null){ k[r]=val; changed=true; } else if (k[r]!==val){ return false; } }
+                  if (pMap[cIdx]!==null && k[r]!==null){ if ( ((pMap[cIdx] - pIdx)%26+26)%26 !== k[r]) return false; }
+                }
+                const seen=new Set();
+                for (let i=0;i<26;i++){ const v=pMap[i]; if (v===null) continue; if (seen.has(v)) return false; seen.add(v); }
+              }
+              return true;
+            }
+            function dfs(){
+              if (!propagate()) return null;
+              if (k.every(v=>v!==null)) return {p:pMap.slice(), k:k.slice()};
+              const counts = new Array(m).fill(0); cons.forEach(({r})=>counts[r]++);
+              let rr=-1, best=-1; for (let r=0;r<m;r++){ if (k[r]===null && counts[r]>best){best=counts[r]; rr=r;} }
+              if (rr<0) return {p:pMap.slice(), k:k.slice()};
+              let cand=null; for (const {r,cIdx,pIdx} of cons){ if (r===rr && pMap[cIdx]!==null){ cand = [ ((pMap[cIdx] - pIdx)%26+26)%26 ]; break; } }
+              if (!cand) cand=[...Array(26).keys()];
+              for (const val of cand){ const old=k[rr]; k[rr]=val; const res=dfs(); if (res) return res; k[rr]=old; }
+              return null;
+            }
+            const sol = dfs();
+            if (sol){
+              const P = fillPerm(sol.p);
+              const dec=[]; for (let i=0;i<cLetters.length;i++){ const c=A2I[cLetters[i]]; dec.push( A[ ((P[c]-sol.k[i % m])%26+26)%26 ] ); }
+              results.push({m, key:sol.k, cipherNorm:P, plaintext:dec.join('')});
+            }
+          }
+          return results;
+        }
+        function cribLetterAt(cribMap, pos){
+          if (!cribMap) return null;
+          const raw = cribMap[pos];
+          if (!raw) return null;
+          const up = sanitize(typeof raw === 'string' ? raw : String(raw));
+          return up.length ? up[0] : null;
+        }
+        function findNextCribSegment(stepToAbs, cribMap, endStep){
+          if (!Array.isArray(stepToAbs)) return [];
+          for (let step = endStep + 1; step < stepToAbs.length; step++){
+            const abs = stepToAbs[step];
+            if (abs == null || abs < 0) continue;
+            const letter = cribLetterAt(cribMap, abs);
+            if (!letter) continue;
+            const segment = [];
+            let pos = step;
+            while (pos < stepToAbs.length){
+              const absIdx = stepToAbs[pos];
+              if (absIdx == null || absIdx < 0) break;
+              const nextLetter = cribLetterAt(cribMap, absIdx);
+              if (!nextLetter) break;
+              segment.push({ step: pos, abs: absIdx, letter: nextLetter });
+              pos++;
+            }
+            return segment;
+          }
+          return [];
+        }
+        function matchesNextSegment(text, segment){
+          if (!segment || !segment.length) return true;
+          for (const item of segment){
+            const ch = (text[item.abs] || '').toUpperCase();
+            if (ch !== item.letter) return false;
+          }
+          return true;
+        }
+        function runBruteForce(msg){
+          __cancelled = false;
+          const letters = Array.isArray(msg.letters) ? msg.letters : [];
+          const wordlist = Array.isArray(msg.wordlist) ? msg.wordlist : [];
+          const startPos = msg.startPos|0;
+          const endPos = msg.endPos|0;
+          const selectionLength = msg.selectionLength|0;
+          const minK = msg.minK|0;
+          const maxK = msg.maxK|0;
+          const op = msg.op || 'vigenere';
+          const maxResults = msg.maxResults|0;
+          const quickTrials = Number.isFinite(msg.quickTrials) ? Math.max(0, msg.quickTrials|0) : 30;
+          const trialDepth = Number.isFinite(msg.trialDepth) ? Math.max(0, msg.trialDepth|0) : 3;
+          const quickOpts = { propagateOnly: true, quickTrials, trialDepth };
+          const cribPairs = Array.isArray(msg.cribPairs) ? msg.cribPairs : [];
+          const cribMap = {};
+          for (const pair of cribPairs){
+            if (!pair || pair.length < 2) continue;
+            const pos = pair[0];
+            const letter = pair[1];
+            if (typeof pos !== 'number') continue;
+            const up = (letter || '').toString().toUpperCase().replace(/[^A-Z]/g,'');
+            if (up) cribMap[pos|0] = up[0];
+          }
+          const { cLetters, absToLetterStep } = buildLetterStreams(letters);
+          const stepToAbs = new Array(cLetters.length).fill(-1);
+          for (let i=0; i<absToLetterStep.length; i++){ const step = absToLetterStep[i]; if (step >= 0) stepToAbs[step] = i; }
+          const existingCribs = collectContiguousCribs(letters, cribMap);
+          const selLen = selectionLength > 0 ? selectionLength : (endPos - startPos + 1);
+          const cipherSeg = cLetters.slice(startPos, endPos + 1).join('');
+          const totalWords = wordlist.length;
+          let wordsChecked = 0;
+          let wordsSkipped = msg.preSkipped|0;
+          const results = [];
+          const progressTotal = Math.max(1, totalWords);
+          postMessage({ kind:'brute_progress', done:0, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+          const minKVal = Number.isFinite(minK) && minK > 0 ? minK : 1;
+          const maxKVal = Number.isFinite(maxK) && maxK >= minKVal ? maxK : minKVal;
+          const enforceNext = !!msg.bridgeNext;
+          const nextSegment = enforceNext ? findNextCribSegment(stepToAbs, cribMap, endPos) : [];
+          const nextSegmentLen = nextSegment.length;
+          for (let idx=0; idx<wordlist.length && !__cancelled; idx++){
+            const raw = wordlist[idx];
+            const word = sanitize(raw || '');
+            if (!word || word.length !== selLen){
+              wordsSkipped++;
+              if ((idx % 50) === 49 || idx === wordlist.length - 1){
+                postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+              }
+              continue;
+            }
+            wordsChecked++;
+            if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
+              const candidateCribMap = Object.assign({}, cribMap);
+              let conflict = false;
+              for (let t=0; t<word.length; t++){
+                const letterStep = startPos + t;
+                const absPos = stepToAbs[letterStep];
+                if (absPos != null && absPos >= 0 && isLetter(letters[absPos])){
+                  const up = word[t];
+                  if (candidateCribMap[absPos] && candidateCribMap[absPos] !== up){ conflict = true; break; }
+                  candidateCribMap[absPos] = up;
+                }
+              }
+              if (!conflict){
+                const plausible = [];
+                for (let kk=minKVal; kk<=maxKVal && !__cancelled; kk++){
+                  try {
+                    const quick = (op === 'vig_custom_alpha')
+                      ? solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickOpts)
+                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, quickOpts);
+                    if (quick){
+                      plausible.push(kk);
+                    }
+                  } catch(e){}
+                }
+                if (!plausible.length) continue;
+                for (const kk of plausible){
+                  if (__cancelled) break;
+                  try {
+                    const sol = (op === 'vig_custom_alpha')
+                      ? solveVigUnknownAlphabet(letters, candidateCribMap, kk)
+                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk);
+                    if (!sol || !sol.pos || !sol.k) continue;
+                    const fullDec = (op === 'vig_custom_alpha')
+                      ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
+                      : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
+                    if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
+                    const decLetters = sanitize(fullDec).split('');
+                    const fitness = englishFitness(decLetters);
+                    const inv = new Array(26);
+                    for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
+                    results.push({
+                      word,
+                      keyLength: kk,
+                      key: sol.k.map(x=>A[x]).join(''),
+                      alphabet: inv.join(''),
+                      decrypted: fullDec,
+                      fitness,
+                      op
+                    });
+                  } catch(e){}
+                }
+              }
+            } else {
+              for (let k=minKVal; k<=maxKVal && !__cancelled; k++){
+                if (op === 'vigenere'){
+                  const res = solveCribVigenere(cipherSeg, word, k, startPos);
+                  if (!res.ok) continue;
+                  let consistent = true;
+                  for (const existing of existingCribs){
+                    let letterIdx = -1;
+                    for (let i=0, seen=0; i<letters.length; i++){
+                      if (isLetter(letters[i])){
+                        if (i === existing.start){ letterIdx = seen; break; }
+                        seen++;
+                      }
+                    }
+                    if (letterIdx >= 0){
+                      const check = solveCribVigenere(existing.cipherSeg, existing.plainSeg, k, letterIdx);
+                      if (!check.ok){ consistent = false; break; }
+                    }
+                  }
+                  if (!consistent) continue;
+                  const decrypted = applyVigenereDecrypt(letters, res.template);
+                  if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(decrypted, nextSegment)) continue;
+                  const decLetters = sanitize(decrypted).split('');
+                  const fitness = englishFitness(decLetters);
+                  results.push({
+                    word,
+                    keyLength: k,
+                    key: res.template.map(x => x===null ? '?' : A[x]).join(''),
+                    decrypted,
+                    fitness,
+                    op: 'vigenere'
+                  });
+                } else if (op === 'vig_sub' || op === 'vig_sub_post'){
+                  const constraints = [];
+                  for (let t=0; t<word.length; t++){
+                    constraints.push({
+                      pos: startPos + t,
+                      cIdx: A2I[cipherSeg[t]],
+                      pIdx: A2I[word[t]]
+                    });
+                  }
+                  for (const existing of existingCribs){
+                    let letterIdx = -1;
+                    for (let i=0, seen=0; i<letters.length; i++){
+                      if (isLetter(letters[i])){
+                        if (i === existing.start){ letterIdx = seen; break; }
+                        seen++;
+                      }
+                    }
+                    if (letterIdx >= 0){
+                      for (let t=0; t<existing.cipherSeg.length; t++){
+                        const pos = letterIdx + t;
+                        constraints.push({ pos, cIdx: A2I[existing.cipherSeg[t]], pIdx: A2I[existing.plainSeg[t]] });
+                      }
+                    }
+                  }
+                  if (op === 'vig_sub'){
+                    const det = solveMASVigDeterministic(cLetters, constraints, k, k);
+                    if (det.length){
+                      const r = det[0];
+                      let outFull=''; let kpos=0;
+                      for (let i=0;i<letters.length;i++){
+                        const ch=letters[i];
+                        if (!isLetter(ch)){ outFull+=ch; }
+                        else { outFull+= r.plaintext[kpos++] || '?'; }
+                      }
+                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(outFull, nextSegment)) continue;
+                      const decLetters = sanitize(outFull).split('');
+                      const fitness = englishFitness(decLetters);
+                      results.push({
+                        word,
+                        keyLength: k,
+                        key: r.key.map(v=>A[v]).join(''),
+                        decrypted: outFull,
+                        fitness,
+                        op: 'vig_sub'
+                      });
+                    }
+                  } else {
+                    const det = solveCipherSubDeterministic(cLetters, constraints, k, k);
+                    if (det.length){
+                      const r = det[0];
+                      let outFull=''; let kpos=0;
+                      for (let i=0;i<letters.length;i++){
+                        const ch=letters[i];
+                        if (!isLetter(ch)){ outFull+=ch; }
+                        else { outFull+= r.plaintext[kpos++] || '?'; }
+                      }
+                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(outFull, nextSegment)) continue;
+                      const decLetters = sanitize(outFull).split('');
+                      const fitness = englishFitness(decLetters);
+                      results.push({
+                        word,
+                        keyLength: k,
+                        key: r.key.map(v=>A[v]).join(''),
+                        decrypted: outFull,
+                        fitness,
+                        op: 'vig_sub_post'
+                      });
+                    }
+                  }
+                }
+              }
+            }
+            if ((idx % 25) === 24 || idx === wordlist.length - 1){
+              postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+            }
+          }
+          results.sort((a,b)=> (isFinite(b.fitness)?b.fitness:-Infinity) - (isFinite(a.fitness)?a.fitness:-Infinity));
+          const limited = (maxResults && maxResults > 0) ? results.slice(0, maxResults) : results.slice();
+          postMessage({ kind:'brute_done', results: limited, totalCandidates: results.length, wordsChecked, wordsSkipped, startPos, endPos, maxResults, cancelled: __cancelled, bridgeNext: enforceNext, nextSegmentLen });
+        }
         onmessage = (ev)=>{
           const msg = ev.data||{};
+          if (msg && msg.cmd === 'cancel'){
+            __cancelled = true;
+            try { close(); } catch(e){}
+            return;
+          }
+          if (msg && msg.cmd === 'bruteforce'){
+            runBruteForce(msg);
+            return;
+          }
           if (msg && msg.cmd === 'start'){
-            const letters = msg.letters;
-            const cribMap = {}; for (const pair of msg.cribPairs){ cribMap[pair[0]] = pair[1]; }
+            __cancelled = false;
+            __candsFound = 0;
+            const op = msg.op || 'vig_custom_alpha';
+            const letters = msg.letters || [];
+            const cribMap = {}; for (const pair of (msg.cribPairs||[])){ if (pair && pair.length >= 2) cribMap[pair[0]] = pair[1]; }
             const minK = msg.minK|0, maxK = msg.maxK|0;
             const total = Math.max(1, maxK - minK + 1);
             postMessage({ kind:'progress', done:0, total, label:'m='+minK, candidatesFound: __candsFound });
             const results=[];
-            for (let m=minK; m<=maxK; m++){
-              const sol = solveVigUnknownAlphabet(letters, cribMap, m, (p)=>postMessage({kind:'hint', m, p}));
-              if (sol){
-                const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
-                const fit = englishFitness(dec.toUpperCase().replace(/[^A-Z]/g,'').split(''));
-                __candsFound++; results.push({ keyLength:m, key: sol.k.map(v=>String.fromCharCode(65+v)).join(''), pos: sol.pos, k: sol.k, score: fit, preview: dec.slice(0,200), full: dec });
+            for (let m=minK; m<=maxK && !__cancelled; m++){
+              if (op === 'autokey_custom_alpha'){
+                const sol = solveAutokeyUnknownAlphabet(letters, cribMap, m);
+                if (sol){
+                  const dec = decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
+                  const fit = englishFitness(dec.toUpperCase().replace(/[^A-Z]/g,'').split(''));
+                  __candsFound++;
+                  const cand = { keyLength:m, key: sol.k.map(v=>String.fromCharCode(65+v)).join(''), posRaw: sol.pos, kRaw: sol.k, score: fit, preview: dec.slice(0,200), full: dec };
+                  results.push(cand);
+                  postMessage({ kind:'candidate', ...cand });
+                }
+              } else {
+                const sol = solveVigUnknownAlphabet(letters, cribMap, m, (p)=>postMessage({kind:'hint', m, p}));
+                if (sol){
+                  const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+                  const fit = englishFitness(dec.toUpperCase().replace(/[^A-Z]/g,'').split(''));
+                  __candsFound++;
+                  results.push({ keyLength:m, key: sol.k.map(v=>String.fromCharCode(65+v)).join(''), posRaw: sol.pos, kRaw: sol.k, score: fit, preview: dec.slice(0,200), full: dec });
+                }
               }
               postMessage({ kind:'progress', done:(m - minK + 1), total, label:'m='+m, candidatesFound: __candsFound });
             }
-            results.sort((a,b)=>b.score-a.score);
-            postMessage({kind:'done', results});
+            if (__cancelled){
+              postMessage({ kind:'done', cancelled:true, results });
+            } else {
+              results.sort((a,b)=>b.score-a.score);
+              postMessage({kind:'done', op, results});
+            }
           }
         };
       `;
@@ -2124,7 +2679,12 @@ try{
 
     function updateStopVisibility(){
       if (!BTN_STOP) return;
-      const show = !!(SEL_OP && SEL_OP.value === 'vig_custom_alpha');
+      if (currentJob){
+        BTN_STOP.style.display = 'inline-block';
+        BTN_STOP.disabled = false;
+        return;
+      }
+      const show = !!(SEL_OP && (SEL_OP.value === 'vig_custom_alpha' || SEL_OP.value === 'autokey_custom_alpha'));
       BTN_STOP.style.display = show ? 'inline-block' : 'none';
       BTN_STOP.disabled = !show;
     }
@@ -2136,10 +2696,20 @@ try{
         uaWorker = null;
       }
       hideProgress();
-      if (BTN_TEST) BTN_TEST.disabled = false;
+      if (currentJob === 'brute'){
+        if (BTN_BRUTE) BTN_BRUTE.disabled = false;
+        if (BRUTE_PANEL) BRUTE_PANEL.style.display = 'block';
+        if (typeof summaryText === 'string' && BRUTE_SUMMARY) BRUTE_SUMMARY.textContent = summaryText;
+        if (typeof outText === 'string' && BRUTE_OUT) BRUTE_OUT.textContent = outText;
+      } else {
+        if (BTN_TEST) BTN_TEST.disabled = false;
+        if (typeof summaryText === 'string' && SUMMARY) SUMMARY.textContent = summaryText;
+        if (typeof outText === 'string' && OUT) OUT.textContent = outText;
+      }
+      currentJob = null;
+      bruteCtx = null;
       resetStop();
-      if (typeof summaryText === 'string' && SUMMARY) SUMMARY.textContent = summaryText;
-      if (typeof outText === 'string' && OUT) OUT.textContent = outText;
+      updateStopVisibility();
     }
 
     function startWorkerSolve(){
@@ -2148,12 +2718,19 @@ try{
         if (SUMMARY) SUMMARY.textContent = 'Enter at least one crib segment first.';
         return;
       }
+      const isAutokey = payload.op === 'autokey_custom_alpha';
+      const modeLabel = isAutokey ? 'autokey + unknown alphabet' : 'unknown alphabet Vigenère';
+
+      currentJob = 'unknown';
+      bruteCtx = null;
+
       if (BTN_TEST) BTN_TEST.disabled = true;
       if (BTN_STOP){
         BTN_STOP.style.display = 'inline-block';
         BTN_STOP.disabled = false;
       }
-      if (SUMMARY) SUMMARY.textContent = 'Running unknown alphabet Vigenère…';
+      updateStopVisibility();
+      if (SUMMARY) SUMMARY.textContent = `Running ${modeLabel}…`;
       if (OUT) OUT.textContent = '';
       if (CAND_CNT) CAND_CNT.textContent = '0';
       showProgress(1, 'Estimating search space…');
@@ -2215,11 +2792,36 @@ try{
 
           const baseResults = Array.isArray(data.results) && data.results.length ? data.results : streamed;
           if (!baseResults.length){
-            if (SUMMARY) SUMMARY.textContent = `No solution for key lengths ${payload.minK}..${payload.maxK} under this model.`;
+            if (SUMMARY) SUMMARY.textContent = `No solution for key lengths ${payload.minK}..${payload.maxK} under ${modeLabel}.`;
+            if (isAutokey && OUT){
+              const letters = Array.isArray(payload.letters) ? payload.letters : [];
+              const cribMap = {};
+              (Array.isArray(payload.cribPairs) ? payload.cribPairs : []).forEach(([pos, letter]) => {
+                if (typeof pos === 'number' && letter){ cribMap[pos] = letter; }
+              });
+              const detailLines = [];
+              for (let m = payload.minK; m <= payload.maxK; m++){
+                const cov = autokeyCoverageDiagnostics(letters, cribMap, m);
+                if (!cov) continue;
+                const residues = (cov.residues || []).map((cnt, idx)=>`${idx}:${cnt}`).join(', ');
+                detailLines.push(`m=${m}: crib steps=${cov.totalSteps}, feed links=${cov.feedLinks}, missing feed=${cov.missingFeed.length}, residues {${residues}}`);
+                if (cov.missingFeed.length){
+                  const sample = cov.missingFeed.slice(0,5).map(({step, dependsOn})=>`(${step}<-${dependsOn})`).join(' ');
+                  if (sample){
+                    detailLines.push(`  uncovered autokey links: ${sample}${cov.missingFeed.length>5?' …':''}`);
+                  }
+                }
+              }
+              if (detailLines.length){
+                OUT.textContent = detailLines.join('\n');
+              } else {
+                OUT.textContent = 'Autokey mode relies on chained crib coverage (positions spaced by the key length). Try adding overlapping cribs or narrowing the key-length range.';
+              }
+            }
             return;
           }
           baseResults.sort((a,b)=> (b.score||0) - (a.score||0));
-          if (SUMMARY) SUMMARY.textContent = `Found ${baseResults.length} solution(s) for unknown alphabet Vigenère.`;
+          if (SUMMARY) SUMMARY.textContent = `Found ${baseResults.length} solution(s) for ${modeLabel}.`;
           if (OUT) OUT.textContent = '';
           const target = OUT || document.createElement('div');
           const best = baseResults[0];
@@ -2230,7 +2832,7 @@ try{
             const block = document.createElement('pre');
             block.textContent =
               `Best candidate (m=${best.keyLength})\n` +
-              `key residues: ${best.key}\n` +
+              `${isAutokey ? 'initial key: ' : 'key residues: '}${best.key}\n` +
               `alphabet:    ${alphaStr}\n\n` +
               (best.full || '');
             target.appendChild(block);
@@ -2258,24 +2860,140 @@ try{
       uaWorker.postMessage({ cmd:'start', ...payload });
     }
 
+    function startBruteWorker(payload){
+      if (!payload || !Array.isArray(payload.wordlist)){
+        return;
+      }
+
+      const totalWords = Array.isArray(payload.wordlist) ? payload.wordlist.length : 0;
+      const skippedPre = payload.preSkipped|0;
+
+      if (!totalWords){
+        if (BRUTE_PANEL) BRUTE_PANEL.style.display = 'block';
+        if (BRUTE_SUMMARY){
+          let text = `No candidate words to test (skipped ${skippedPre} wrong-length).`;
+          if (payload.bridgeNext){
+            text += ' Enforce-next-crib requested.';
+          }
+          BRUTE_SUMMARY.textContent = text;
+        }
+        return;
+      }
+
+      currentJob = 'brute';
+      bruteCtx = {
+        startPos: payload.startPos|0,
+        endPos: payload.endPos|0,
+        maxResults: payload.maxResults,
+        skippedPre,
+        totalWords,
+        bridgeNext: !!payload.bridgeNext
+      };
+
+      if (BTN_BRUTE) BTN_BRUTE.disabled = true;
+      if (BTN_STOP){
+        BTN_STOP.style.display = 'inline-block';
+        BTN_STOP.disabled = false;
+      }
+      if (BRUTE_PANEL) BRUTE_PANEL.style.display = 'block';
+      if (BRUTE_OUT) BRUTE_OUT.innerHTML = '';
+      if (BRUTE_SUMMARY){
+        let text = `Running brute force on ${totalWords.toLocaleString()} word(s) (skipped ${skippedPre.toLocaleString()} wrong-length).`;
+        if (payload.bridgeNext){
+          text += ' Enforcing next crib segment.';
+        }
+        BRUTE_SUMMARY.textContent = text;
+      }
+
+      showProgress(Math.max(1, totalWords), 'Brute forcing wordlist…');
+
+      if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
+      uaWorker = makeWorker();
+
+      let progressInitialized = false;
+
+      uaWorker.onmessage = (ev) => {
+        const data = ev && ev.data ? ev.data : {};
+        const kind = data.kind || data.type || data.event;
+        if (kind === 'brute_progress'){
+          const total = Math.max(1, data.total|0);
+          if (!progressInitialized){
+            showProgress(total, 'Brute forcing wordlist…');
+            progressInitialized = true;
+          }
+          const done = data.done|0;
+          const checked = data.checked|0;
+          const skipped = data.skipped|0;
+          const label = data.label || `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words`;
+          updateProgress(done, label);
+          if (BRUTE_SUMMARY){
+            let text = `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words (skipped ${skipped.toLocaleString()}).`;
+            if (bruteCtx && bruteCtx.bridgeNext){
+              text += ' Enforcing next crib segment.';
+            }
+            BRUTE_SUMMARY.textContent = text;
+          }
+          return;
+        }
+        if (kind === 'brute_done'){
+          hideProgress();
+          if (BTN_STOP){
+            BTN_STOP.style.display = 'none';
+            BTN_STOP.disabled = true;
+          }
+          if (BTN_BRUTE) BTN_BRUTE.disabled = false;
+          try { uaWorker.terminate(); } catch(e){}
+          uaWorker = null;
+
+          const wordsChecked = data.wordsChecked|0;
+          const wordsSkipped = data.wordsSkipped|0;
+          const totalCandidates = typeof data.totalCandidates === 'number' ? data.totalCandidates : (Array.isArray(data.results) ? data.results.length : 0);
+          const results = Array.isArray(data.results) ? data.results : [];
+
+          displayBruteResults(
+            results,
+            data.startPos,
+            data.endPos,
+            wordsChecked,
+            wordsSkipped,
+            totalCandidates,
+            data.maxResults,
+            { bridgeNext: !!data.bridgeNext, nextSegmentLen: typeof data.nextSegmentLen === 'number' ? data.nextSegmentLen : undefined }
+          );
+          if (data.cancelled && BRUTE_SUMMARY){
+            BRUTE_SUMMARY.textContent += ' (stopped early)';
+          }
+
+          currentJob = null;
+          bruteCtx = null;
+          updateStopVisibility();
+          return;
+        }
+      };
+
+      uaWorker.onerror = (e) => {
+        const msg = e && (e.message || e.toString()) || 'unknown error';
+        stopWorker('Brute force worker error: ' + msg);
+      };
+
+      uaWorker.postMessage({ cmd:'bruteforce', ...payload });
+    }
+
     if (BTN_STOP){
       BTN_STOP.addEventListener('click', (ev)=>{
         ev.preventDefault();
-        stopWorker('Search cancelled.');
+        const msg = currentJob === 'brute' ? 'Brute force cancelled.' : 'Search cancelled.';
+        stopWorker(msg);
       });
     }
 
     if (BTN_TEST){
       BTN_TEST.addEventListener('click', (ev)=>{
         const op = SEL_OP ? SEL_OP.value : '';
-        if (op === 'vig_custom_alpha'){
+        if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
           ev.preventDefault();
           ev.stopImmediatePropagation();
           startWorkerSolve();
-        } else if (op === 'autokey_custom_alpha'){
-          ev.preventDefault();
-          ev.stopImmediatePropagation();
-          runUnknownAlphabetInline();
         }
       }, true);
     }
@@ -2285,6 +3003,10 @@ try{
       updateStopVisibility();
     } else {
       resetStop();
+    }
+
+    if (typeof window !== 'undefined'){
+      window.__startBruteWorker = startBruteWorker;
     }
   })();
   </script>
