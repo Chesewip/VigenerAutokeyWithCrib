@@ -1372,8 +1372,10 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
   function propagate(){
     let changed = true;
     while (changed){
+      if (limitReached()) return false;
       changed = false;
       for (const cons of constraints){
+        if (limitReached()) return false;
         if (cons.type === 'init'){
           const a = pos[cons.pSym];
           const b = pos[cons.cSym];
@@ -1418,6 +1420,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
         }
       }
     }
+    if (limitReached()) return false;
     return true;
   }
 
@@ -1454,6 +1457,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
     nodeVisits++;
     if (limitReached()) return null;
     if (!propagate()) return null;
+    if (limitReached()) return null;
     const sel = chooseVar();
     if (!sel){
       const posFull = pos.slice();
@@ -2546,76 +2550,101 @@ try{
                 const wordDeadline = (op === 'autokey_custom_alpha' && perWordTimeoutMs > 0) ? (getTime() + perWordTimeoutMs) : null;
                 const plausible = [];
                 for (let kk=minKVal; kk<=maxKVal && !__cancelled; kk++){
-                  try {
-                    const quick = (op === 'vig_custom_alpha')
-                      ? solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickOpts)
-                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, quickOpts);
-                    if (quick){
-                      plausible.push(kk);
-                    }
-                  } catch(e){}
-                }
-                if (!plausible.length){
-                  if (shouldReport(idx)){
-                    const processed = idx + 1;
-                    postMessage({ kind:'brute_progress', done: processed, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed, timedOut: wordsTimedOut });
-                  }
-                  continue;
-                }
-                for (const kk of plausible){
-                  if (__cancelled || wordTimedOut) break;
+                  if (wordTimedOut) break;
                   try {
                     if (op === 'vig_custom_alpha'){
-                      const sol = solveVigUnknownAlphabet(letters, candidateCribMap, kk);
-                      if (!sol || !sol.pos || !sol.k) continue;
-                      const fullDec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
-                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
-                      const decLetters = sanitize(fullDec).split('');
-                      const fitness = englishFitness(decLetters);
-                      const inv = new Array(26);
-                      for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
-                      results.push({
-                        word,
-                        keyLength: kk,
-                        key: sol.k.map(x=>A[x]).join(''),
-                        alphabet: inv.join(''),
-                        decrypted: fullDec,
-                        fitness,
-                        op: 'vig_custom_alpha'
-                      });
+                      const quick = solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickOpts);
+                      if (quick){
+                        plausible.push(kk);
+                      }
                     } else {
-                      const solveOpts = {};
-                      if (perWordTimeoutMs > 0){
-                        const remaining = wordDeadline !== null ? (wordDeadline - getTime()) : perWordTimeoutMs;
-                        if (remaining <= 0){
+                      let remainingQuick = null;
+                      if (wordDeadline !== null){
+                        remainingQuick = wordDeadline - getTime();
+                        if (remainingQuick <= 0){
                           wordTimedOut = true;
                           break;
                         }
-                        solveOpts.maxMillis = Math.max(1, Math.floor(remaining));
                       }
-                      const sol = solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, solveOpts);
-                      if (solveOpts && solveOpts.timedOut){
+                      const quickOptions = Object.assign({}, quickOpts);
+                      if (wordDeadline !== null){
+                        const maxForQuick = Math.max(1, Math.floor(remainingQuick));
+                        quickOptions.maxMillis = maxForQuick;
+                      } else if (perWordTimeoutMs > 0){
+                        quickOptions.maxMillis = perWordTimeoutMs;
+                      }
+                      const quick = solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, quickOptions);
+                      if (quickOptions && quickOptions.timedOut){
                         wordTimedOut = true;
                         break;
                       }
-                      if (!sol || !sol.pos || !sol.k) continue;
-                      const fullDec = decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
-                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
-                      const decLetters = sanitize(fullDec).split('');
-                      const fitness = englishFitness(decLetters);
-                      const inv = new Array(26);
-                      for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
-                      results.push({
-                        word,
-                        keyLength: kk,
-                        key: sol.k.map(x=>A[x]).join(''),
-                        alphabet: inv.join(''),
-                        decrypted: fullDec,
-                        fitness,
-                        op: 'autokey_custom_alpha'
-                      });
+                      if (quick){
+                        plausible.push(kk);
+                      }
                     }
                   } catch(e){}
+                }
+                if (!wordTimedOut && plausible.length){
+                  for (const kk of plausible){
+                    if (__cancelled || wordTimedOut) break;
+                    if (wordDeadline !== null && getTime() >= wordDeadline){
+                      wordTimedOut = true;
+                      break;
+                    }
+                    try {
+                      if (op === 'vig_custom_alpha'){
+                        const sol = solveVigUnknownAlphabet(letters, candidateCribMap, kk);
+                        if (!sol || !sol.pos || !sol.k) continue;
+                        const fullDec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+                        if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
+                        const decLetters = sanitize(fullDec).split('');
+                        const fitness = englishFitness(decLetters);
+                        const inv = new Array(26);
+                        for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
+                        results.push({
+                          word,
+                          keyLength: kk,
+                          key: sol.k.map(x=>A[x]).join(''),
+                          alphabet: inv.join(''),
+                          decrypted: fullDec,
+                          fitness,
+                          op: 'vig_custom_alpha'
+                        });
+                      } else {
+                        const solveOpts = {};
+                        if (perWordTimeoutMs > 0){
+                          const remainingRaw = wordDeadline !== null ? (wordDeadline - getTime()) : perWordTimeoutMs;
+                          if (remainingRaw <= 0){
+                            wordTimedOut = true;
+                            break;
+                          }
+                          const remaining = Math.max(1, Math.floor(remainingRaw));
+                          solveOpts.maxMillis = remaining;
+                        }
+                        const sol = solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, solveOpts);
+                        if (solveOpts && solveOpts.timedOut){
+                          wordTimedOut = true;
+                          break;
+                        }
+                        if (!sol || !sol.pos || !sol.k) continue;
+                        const fullDec = decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
+                        if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
+                        const decLetters = sanitize(fullDec).split('');
+                        const fitness = englishFitness(decLetters);
+                        const inv = new Array(26);
+                        for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
+                        results.push({
+                          word,
+                          keyLength: kk,
+                          key: sol.k.map(x=>A[x]).join(''),
+                          alphabet: inv.join(''),
+                          decrypted: fullDec,
+                          fitness,
+                          op: 'autokey_custom_alpha'
+                        });
+                      }
+                    } catch(e){}
+                  }
                 }
               }
             } else {
