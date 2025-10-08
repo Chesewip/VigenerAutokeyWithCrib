@@ -451,89 +451,55 @@ function prepareAutokeyBaseState(assignments, m){
   const stepCipher = assignments.stepCipher;
   if (!stepPlain || !stepPlain.size) return null;
   const constraints = [];
-  const letterDeg = new Array(N).fill(0);
-  const letterFeedDeg = new Array(N).fill(0);
-  const keyDeg = new Array(m).fill(0);
+  const letterAdj = Array.from({length:N}, ()=>[]);
+  const keyAdj = Array.from({length:m}, ()=>[]);
   const steps = Array.from(stepPlain.keys()).sort((a,b)=>a-b);
   for (const step of steps){
     const pSym = stepPlain.get(step);
     const cSym = stepCipher.get(step);
     if (pSym == null || cSym == null) continue;
     if (step < m){
-      constraints.push({ type:'init', idx:step, pSym, cSym });
-      keyDeg[step]++;
+      const idx = constraints.length;
+      constraints.push({ type:'init', p:pSym, c:cSym, k:step });
+      letterAdj[pSym].push(idx);
+      letterAdj[cSym].push(idx);
+      keyAdj[step].push(idx);
     }
     const depStep = step - m;
     if (depStep >= 0 && stepPlain.has(depStep)){
       const depSym = stepPlain.get(depStep);
-      constraints.push({ type:'feed', idx:step, pSym, cSym, depSym });
-      letterFeedDeg[depSym]++;
+      const idx = constraints.length;
+      constraints.push({ type:'feed', p:pSym, c:cSym, dep:depSym });
+      letterAdj[pSym].push(idx);
+      letterAdj[cSym].push(idx);
+      letterAdj[depSym].push(idx);
     }
-    letterDeg[pSym]++;
-    letterDeg[cSym]++;
   }
   if (!constraints.length) return null;
-  const letterToConstraints = Array.from({length:N}, ()=>[]);
-  const keyToConstraints = Array.from({length:m}, ()=>[]);
-  constraints.forEach((cons, idx)=>{
-    letterToConstraints[cons.pSym].push(idx);
-    letterToConstraints[cons.cSym].push(idx);
-    if (cons.type === 'feed') letterToConstraints[cons.depSym].push(idx);
-    if (cons.type === 'init') keyToConstraints[cons.idx].push(idx);
-  });
-  const base = {
+  const FULL_MASK = (1<<26) - 1;
+  return {
     m,
     constraints,
-    letterDeg,
-    letterFeedDeg,
-    keyDeg,
-    letterToConstraints,
-    keyToConstraints,
+    letterAdj,
+    keyAdj,
     stepPlain,
-    stepCipher
+    stepCipher,
+    letterDomainsTemplate: new Array(N).fill(FULL_MASK),
+    letterDomainSizesTemplate: new Array(N).fill(26),
+    keyDomainsTemplate: new Array(m).fill(FULL_MASK),
+    keyDomainSizesTemplate: new Array(m).fill(26)
   };
-  base.posTemplate = new Array(N).fill(null);
-  base.usedTemplate = new Array(N).fill(false);
-  base.cipherOwnerTemplate = new Array(N).fill(-1);
-  base.keyTemplate = new Array(m).fill(null);
-  base.letterDomainsTemplate = Array.from({length:N}, ()=>Array(N).fill(1));
-  base.letterDomainSizesTemplate = new Array(N).fill(N);
-  base.keyDomainsTemplate = Array.from({length:m}, ()=>Array(N).fill(1));
-  base.keyDomainSizesTemplate = new Array(m).fill(N);
-  let anchor = -1;
-  let bestScore = -1;
-  for (let L=0; L<N; L++){
-    const deg = letterDeg[L];
-    if (!deg) continue;
-    const score = deg * 8 + (letterFeedDeg[L] || 0);
-    if (score > bestScore){
-      bestScore = score;
-      anchor = L;
-    }
-  }
-  if (anchor !== -1){
-    base.anchor = anchor;
-    base.anchorValue = 0;
-    base.posTemplate[anchor] = 0;
-    base.usedTemplate[0] = true;
-    base.cipherOwnerTemplate[0] = anchor;
-    const dom = base.letterDomainsTemplate[anchor];
-    for (let i=0; i<N; i++) dom[i] = (i === 0) ? 1 : 0;
-    base.letterDomainSizesTemplate[anchor] = 1;
-  }
-  return base;
 }
 
 function instantiateAutokeyState(base){
   return {
-    pos: base.posTemplate.slice(),
-    used: base.usedTemplate.slice(),
-    cipherOwner: base.cipherOwnerTemplate.slice(),
-    keyInit: base.keyTemplate.slice(),
-    letterDomains: base.letterDomainsTemplate.map(arr => arr.slice()),
+    pos: new Array(26).fill(null),
+    key: new Array(base.m).fill(null),
+    letterDomains: base.letterDomainsTemplate.slice(),
     letterDomainSizes: base.letterDomainSizesTemplate.slice(),
-    keyDomains: base.keyDomainsTemplate.map(arr => arr.slice()),
-    keyDomainSizes: base.keyDomainSizesTemplate.slice()
+    keyDomains: base.keyDomainsTemplate.slice(),
+    keyDomainSizes: base.keyDomainSizesTemplate.slice(),
+    used: new Array(26).fill(false)
   };
 }
 
@@ -1375,6 +1341,7 @@ function solveVigUnknownAlphabet(letters, cribMap, m, options){
 
 
 
+
 function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
   const N = 26;
   if (!Number.isFinite(m) || m <= 0) return null;
@@ -1389,500 +1356,292 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
   } else if (base.m !== m){
     return null;
   }
+
+  const FULL_MASK = (1<<26) - 1;
+  const state = instantiateAutokeyState(base);
+  const progressCb = options.progressCb;
   const propagateOnly = !!options.propagateOnly;
   const MAX_TRIALS = Number.isFinite(options.quickTrials) ? Math.max(0, options.quickTrials|0) : 30;
   const TRIAL_DEPTH = Number.isFinite(options.trialDepth) ? Math.max(0, options.trialDepth|0) : 3;
-  const progressCb = options.progressCb;
 
-  const state = instantiateAutokeyState(base);
-  const pos = state.pos;
-  const used = state.used;
-  const cipherOwner = state.cipherOwner;
-  const keyInit = state.keyInit;
-  const letterDomains = state.letterDomains;
-  const letterDomainSizes = state.letterDomainSizes;
-  const keyDomains = state.keyDomains;
-  const keyDomainSizes = state.keyDomainSizes;
-
-  const constraints = base.constraints;
-  if (!constraints || !constraints.length) return null;
-  const letterToConstraints = base.letterToConstraints;
-  const keyToConstraints = base.keyToConstraints;
-  const letterDeg = base.letterDeg;
-  const letterFeedDeg = base.letterFeedDeg || new Array(N).fill(0);
-  const keyDeg = base.keyDeg;
-  const anchor = base.anchor;
-  const anchorValue = base.anchorValue || 0;
-  const mLen = base.m;
-
-  const mod = (x)=>((x%N)+N)%N;
-
-  function letterDomainValues(idx){
-    const arr = [];
-    const dom = letterDomains[idx];
-    for (let v=0; v<N; v++) if (dom[v]) arr.push(v);
-    return arr;
+  function popcount(mask){
+    mask = mask >>> 0;
+    mask = mask - ((mask >>> 1) & 0x55555555);
+    mask = (mask & 0x33333333) + ((mask >>> 2) & 0x33333333);
+    return (((mask + (mask >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
   }
 
-  function keyDomainValues(idx){
-    const arr = [];
-    const dom = keyDomains[idx];
-    for (let v=0; v<N; v++) if (dom[v]) arr.push(v);
-    return arr;
+  function maskValues(mask){
+    const vals = [];
+    let bit = 0;
+    while (mask){
+      if (mask & 1) vals.push(bit);
+      mask >>>= 1;
+      bit++;
+    }
+    return vals;
   }
 
-  function assignLetter(idx, value, ctx){
-    if (idx == null) return { ok:true, changed:false };
-    value = mod(value);
-    const current = pos[idx];
-    if (current !== null){
-      return { ok: current === value, changed:false };
+  function setLetter(state, idx, value, queue){
+    const bit = 1 << value;
+    if ((state.letterDomains[idx] & bit) === 0) return false;
+    if (state.pos[idx] !== null){
+      return state.pos[idx] === value;
     }
-    const owner = cipherOwner[value];
-    if (owner !== -1 && owner !== idx) return { ok:false, changed:false };
-    pos[idx] = value;
-    cipherOwner[value] = idx;
-    used[value] = true;
-    const dom = letterDomains[idx];
-    for (let v=0; v<N; v++) dom[v] = (v === value) ? 1 : 0;
-    letterDomainSizes[idx] = 1;
-    if (ctx){
-      for (const consIdx of letterToConstraints[idx]) ctx.enqueue(consIdx);
+    state.pos[idx] = value;
+    state.letterDomains[idx] = bit;
+    state.letterDomainSizes[idx] = 1;
+    state.used[value] = true;
+    if (queue){
+      for (const consIdx of base.letterAdj[idx]) queue.push(consIdx);
     }
-    for (let L=0; L<N; L++){
+    for (let L=0; L<26; L++){
       if (L === idx) continue;
-      if (pos[L] !== null) continue;
-      if (letterDomains[L][value]){
-        letterDomains[L][value] = 0;
-        letterDomainSizes[L]--;
-        if (letterDomainSizes[L] <= 0) return { ok:false, changed:true };
-        if (ctx){
-          for (const consIdx of letterToConstraints[L]) ctx.enqueue(consIdx);
+      if (state.pos[L] !== null) continue;
+      if (state.letterDomains[L] & bit){
+        state.letterDomains[L] &= ~bit;
+        const sz = popcount(state.letterDomains[L]);
+        if (sz === 0) return false;
+        state.letterDomainSizes[L] = sz;
+        if (queue){
+          for (const consIdx of base.letterAdj[L]) queue.push(consIdx);
+        }
+        if (sz === 1){
+          const nextVal = maskValues(state.letterDomains[L])[0];
+          if (!setLetter(state, L, nextVal, queue)) return false;
         }
       }
-    }
-    return { ok:true, changed:true };
-  }
-
-  function assignKey(idx, value, ctx){
-    if (idx == null) return { ok:true, changed:false };
-    value = mod(value);
-    const current = keyInit[idx];
-    if (current !== null){
-      return { ok: current === value, changed:false };
-    }
-    keyInit[idx] = value;
-    const dom = keyDomains[idx];
-    for (let v=0; v<N; v++) dom[v] = (v === value) ? 1 : 0;
-    keyDomainSizes[idx] = 1;
-    if (ctx){
-      for (const consIdx of keyToConstraints[idx]) ctx.enqueue(consIdx);
-    }
-    return { ok:true, changed:true };
-  }
-
-  function restrictLetterDomain(idx, allowed, ctx){
-    if (idx == null) return { ok:true, changed:false };
-    if (pos[idx] !== null){
-      return { ok: !!allowed[pos[idx]], changed:false };
-    }
-    const dom = letterDomains[idx];
-    let changed = false;
-    let size = letterDomainSizes[idx];
-    for (let v=0; v<N; v++){
-      if (!dom[v]) continue;
-      if (!allowed[v]){
-        dom[v] = 0;
-        size--;
-        changed = true;
-      }
-    }
-    if (size <= 0) return { ok:false, changed:true };
-    if (changed){
-      letterDomainSizes[idx] = size;
-      if (ctx){
-        for (const consIdx of letterToConstraints[idx]) ctx.enqueue(consIdx);
-      }
-    }
-    return { ok:true, changed };
-  }
-
-  function restrictKeyDomain(idx, allowed, ctx){
-    if (idx == null) return { ok:true, changed:false };
-    if (keyInit[idx] !== null){
-      return { ok: !!allowed[keyInit[idx]], changed:false };
-    }
-    const dom = keyDomains[idx];
-    let changed = false;
-    let size = keyDomainSizes[idx];
-    for (let v=0; v<N; v++){
-      if (!dom[v]) continue;
-      if (!allowed[v]){
-        dom[v] = 0;
-        size--;
-        changed = true;
-      }
-    }
-    if (size <= 0) return { ok:false, changed:true };
-    if (changed){
-      keyDomainSizes[idx] = size;
-      if (ctx){
-        for (const consIdx of keyToConstraints[idx]) ctx.enqueue(consIdx);
-      }
-    }
-    return { ok:true, changed };
-  }
-
-  function processInit(cons, ctx){
-    const p = cons.pSym;
-    const c = cons.cSym;
-    const r = cons.idx;
-    const a = pos[p];
-    const b = pos[c];
-    const keyVal = keyInit[r];
-    if (a !== null && b !== null){
-      const res = assignKey(r, b - a, ctx);
-      if (!res.ok) return false;
-    }
-    if (a !== null && keyVal !== null){
-      const res = assignLetter(c, a + keyVal, ctx);
-      if (!res.ok) return false;
-    }
-    if (b !== null && keyVal !== null){
-      const res = assignLetter(p, b - keyVal, ctx);
-      if (!res.ok) return false;
-    }
-    const pVals = a !== null ? [a] : letterDomainValues(p);
-    const cVals = b !== null ? [b] : letterDomainValues(c);
-    const kVals = keyVal !== null ? [keyVal] : keyDomainValues(r);
-    if (!pVals.length || !cVals.length || !kVals.length) return false;
-    if (keyVal === null){
-      const allowedKey = new Array(N).fill(0);
-      for (const pa of pVals){
-        for (const cb of cVals){
-          allowedKey[mod(cb - pa)] = 1;
-        }
-      }
-      const res = restrictKeyDomain(r, allowedKey, ctx);
-      if (!res.ok) return false;
-    }
-    if (a === null){
-      const allowedP = new Array(N).fill(0);
-      for (const cb of cVals){
-        for (const kv of kVals){
-          allowedP[mod(cb - kv)] = 1;
-        }
-      }
-      const res = restrictLetterDomain(p, allowedP, ctx);
-      if (!res.ok) return false;
-    }
-    if (b === null){
-      const allowedC = new Array(N).fill(0);
-      for (const pa of pVals){
-        for (const kv of kVals){
-          allowedC[mod(pa + kv)] = 1;
-        }
-      }
-      const res = restrictLetterDomain(c, allowedC, ctx);
-      if (!res.ok) return false;
     }
     return true;
   }
 
-  function processFeed(cons, ctx){
-    const p = cons.pSym;
-    const c = cons.cSym;
-    const dep = cons.depSym;
-    const a = pos[p];
-    const b = pos[c];
-    const d = pos[dep];
-    if (a !== null && d !== null){
-      const res = assignLetter(c, a + d, ctx);
-      if (!res.ok) return false;
+  function restrictLetter(state, idx, allowed, queue){
+    const next = state.letterDomains[idx] & allowed;
+    if (next === 0) return false;
+    if (next === state.letterDomains[idx]) return true;
+    state.letterDomains[idx] = next;
+    const sz = popcount(next);
+    state.letterDomainSizes[idx] = sz;
+    if (queue){
+      for (const consIdx of base.letterAdj[idx]) queue.push(consIdx);
     }
-    if (b !== null && a !== null){
-      const res = assignLetter(dep, b - a, ctx);
-      if (!res.ok) return false;
-    }
-    if (b !== null && d !== null){
-      const res = assignLetter(p, b - d, ctx);
-      if (!res.ok) return false;
-    }
-    const pVals = a !== null ? [a] : letterDomainValues(p);
-    const cVals = b !== null ? [b] : letterDomainValues(c);
-    const dVals = d !== null ? [d] : letterDomainValues(dep);
-    if (!pVals.length || !cVals.length || !dVals.length) return false;
-    if (b === null){
-      const allowedC = new Array(N).fill(0);
-      for (const pa of pVals){
-        for (const dv of dVals){
-          allowedC[mod(pa + dv)] = 1;
-        }
-      }
-      const res = restrictLetterDomain(c, allowedC, ctx);
-      if (!res.ok) return false;
-    }
-    if (a === null){
-      const allowedP = new Array(N).fill(0);
-      for (const cb of cVals){
-        for (const dv of dVals){
-          allowedP[mod(cb - dv)] = 1;
-        }
-      }
-      const res = restrictLetterDomain(p, allowedP, ctx);
-      if (!res.ok) return false;
-    }
-    if (d === null){
-      const allowedD = new Array(N).fill(0);
-      for (const cb of cVals){
-        for (const pa of pVals){
-          allowedD[mod(cb - pa)] = 1;
-        }
-      }
-      const res = restrictLetterDomain(dep, allowedD, ctx);
-      if (!res.ok) return false;
+    if (sz === 1){
+      const val = maskValues(next)[0];
+      if (!setLetter(state, idx, val, queue)) return false;
     }
     return true;
   }
 
-  function propagate(){
-    const pending = new Array(constraints.length).fill(false);
+  function setKey(state, idx, value, queue){
+    const bit = 1 << value;
+    if ((state.keyDomains[idx] & bit) === 0) return false;
+    if (state.key[idx] !== null) return state.key[idx] === value;
+    state.key[idx] = value;
+    state.keyDomains[idx] = bit;
+    state.keyDomainSizes[idx] = 1;
+    if (queue){
+      for (const consIdx of base.keyAdj[idx]) queue.push(consIdx);
+    }
+    return true;
+  }
+
+  function restrictKey(state, idx, allowed, queue){
+    const next = state.keyDomains[idx] & allowed;
+    if (next === 0) return false;
+    if (next === state.keyDomains[idx]) return true;
+    state.keyDomains[idx] = next;
+    const sz = popcount(next);
+    state.keyDomainSizes[idx] = sz;
+    if (queue){
+      for (const consIdx of base.keyAdj[idx]) queue.push(consIdx);
+    }
+    if (sz === 1){
+      const val = maskValues(next)[0];
+      if (!setKey(state, idx, val, queue)) return false;
+    }
+    return true;
+  }
+
+  function processInit(state, cons, queue){
+    const pMask = state.letterDomains[cons.p];
+    const cMask = state.letterDomains[cons.c];
+    const kMask = state.keyDomains[cons.k];
+    if (!pMask || !cMask || !kMask) return false;
+    let allowedK = 0;
+    for (const pVal of maskValues(pMask)){
+      for (const cVal of maskValues(cMask)){
+        allowedK |= 1 << ((cVal - pVal + 26) % 26);
+      }
+    }
+    if (!restrictKey(state, cons.k, allowedK, queue)) return false;
+    let allowedP = 0;
+    for (const cVal of maskValues(state.letterDomains[cons.c])){
+      for (const kVal of maskValues(state.keyDomains[cons.k])){
+        allowedP |= 1 << ((cVal - kVal + 26) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.p, allowedP, queue)) return false;
+    let allowedC = 0;
+    for (const pVal of maskValues(state.letterDomains[cons.p])){
+      for (const kVal of maskValues(state.keyDomains[cons.k])){
+        allowedC |= 1 << ((pVal + kVal) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.c, allowedC, queue)) return false;
+    return true;
+  }
+
+  function processFeed(state, cons, queue){
+    const pMask = state.letterDomains[cons.p];
+    const cMask = state.letterDomains[cons.c];
+    const dMask = state.letterDomains[cons.dep];
+    if (!pMask || !cMask || !dMask) return false;
+    let allowedC = 0;
+    for (const pVal of maskValues(pMask)){
+      for (const dVal of maskValues(dMask)){
+        allowedC |= 1 << ((pVal + dVal) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.c, allowedC, queue)) return false;
+    let allowedP = 0;
+    for (const cVal of maskValues(state.letterDomains[cons.c])){
+      for (const dVal of maskValues(dMask)){
+        allowedP |= 1 << ((cVal - dVal + 26) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.p, allowedP, queue)) return false;
+    let allowedD = 0;
+    for (const cVal of maskValues(state.letterDomains[cons.c])){
+      for (const pVal of maskValues(state.letterDomains[cons.p])){
+        allowedD |= 1 << ((cVal - pVal + 26) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.dep, allowedD, queue)) return false;
+    return true;
+  }
+
+  function propagate(state){
     const queue = [];
-    const ctx = {
-      enqueue(idx){
-        if (idx == null) return;
-        if (!pending[idx]){
-          pending[idx] = true;
-          queue.push(idx);
-        }
-      }
+    for (let i=0; i<base.constraints.length; i++) queue.push(i);
+    while (queue.length){
+      const idx = queue.pop();
+      const cons = base.constraints[idx];
+      const ok = cons.type === 'init'
+        ? processInit(state, cons, queue)
+        : processFeed(state, cons, queue);
+      if (!ok) return false;
+    }
+    return true;
+  }
+
+  function isSolved(state){
+    for (let L=0; L<26; L++) if (state.letterDomainSizes[L] !== 1) return false;
+    for (let r=0; r<base.m; r++) if (state.keyDomainSizes[r] !== 1) return false;
+    return true;
+  }
+
+  function cloneState(state){
+    return {
+      pos: state.pos.slice(),
+      key: state.key.slice(),
+      letterDomains: state.letterDomains.slice(),
+      letterDomainSizes: state.letterDomainSizes.slice(),
+      keyDomains: state.keyDomains.slice(),
+      keyDomainSizes: state.keyDomainSizes.slice(),
+      used: state.used.slice()
     };
-    if (anchor != null && pos[anchor] === null){
-      const res = assignLetter(anchor, anchorValue, ctx);
-      if (!res.ok) return false;
-    }
-    for (let i=0; i<constraints.length; i++) ctx.enqueue(i);
-    while (true){
-      while (queue.length){
-        const idx = queue.pop();
-        pending[idx] = false;
-        const cons = constraints[idx];
-        const ok = cons.type === 'init' ? processInit(cons, ctx) : processFeed(cons, ctx);
-        if (!ok) return false;
-      }
-      let assigned = false;
-      for (let L=0; L<N; L++){
-        if (pos[L] === null){
-          if (letterDomainSizes[L] === 0) return false;
-          if (letterDomainSizes[L] === 1){
-            const vals = letterDomainValues(L);
-            if (!vals.length) return false;
-            const res = assignLetter(L, vals[0], ctx);
-            if (!res.ok) return false;
-            assigned = true;
-          }
-        }
-      }
-      for (let r=0; r<mLen; r++){
-        if (keyInit[r] === null){
-          if (keyDomainSizes[r] === 0) return false;
-          if (keyDomainSizes[r] === 1){
-            const vals = keyDomainValues(r);
-            if (!vals.length) return false;
-            const res = assignKey(r, vals[0], ctx);
-            if (!res.ok) return false;
-            assigned = true;
-          }
-        }
-      }
-      if (!assigned) break;
-    }
-    return true;
   }
 
-  function isSolved(){
-    for (let L=0; L<N; L++) if (pos[L] === null) return false;
-    for (let r=0; r<mLen; r++) if (keyInit[r] === null) return false;
-    return true;
-  }
-
-  function chooseVar(){
+  function chooseVar(state){
     let bestLetter = -1;
-    let bestLetterScore = Infinity;
-    let bestLetterWeight = -Infinity;
-    for (let L=0; L<N; L++){
-      if (pos[L] !== null) continue;
-      const size = letterDomainSizes[L];
-      if (size <= 0) return { type:'letter', idx:L };
-      const weight = (letterFeedDeg[L] || 0) * 2 + (letterDeg[L] || 0);
-      if (size < bestLetterScore || (size === bestLetterScore && weight > bestLetterWeight)){
-        bestLetter = L;
-        bestLetterScore = size;
-        bestLetterWeight = weight;
-      }
+    let bestSize = Infinity;
+    for (let L=0; L<26; L++){
+      const sz = state.letterDomainSizes[L];
+      if (sz <= 1) continue;
+      if (sz < bestSize){ bestSize = sz; bestLetter = L; }
     }
-    if (bestLetter !== -1) return { type:'letter', idx: bestLetter };
+    if (bestLetter !== -1) return { type:'letter', idx:bestLetter };
     let bestKey = -1;
-    let bestKeyScore = Infinity;
-    let bestKeyWeight = -Infinity;
-    for (let r=0; r<mLen; r++){
-      if (keyInit[r] !== null) continue;
-      const size = keyDomainSizes[r];
-      if (size <= 0) return { type:'key', idx:r };
-      const weight = keyDeg[r] || 0;
-      if (size < bestKeyScore || (size === bestKeyScore && weight > bestKeyWeight)){
-        bestKey = r;
-        bestKeyScore = size;
-        bestKeyWeight = weight;
-      }
+    bestSize = Infinity;
+    for (let r=0; r<base.m; r++){
+      const sz = state.keyDomainSizes[r];
+      if (sz <= 1) continue;
+      if (sz < bestSize){ bestSize = sz; bestKey = r; }
     }
-    if (bestKey !== -1) return { type:'key', idx: bestKey };
+    if (bestKey !== -1) return { type:'key', idx:bestKey };
     return null;
   }
 
-  function snapshot(){
-    return {
-      pos: pos.slice(),
-      used: used.slice(),
-      cipherOwner: cipherOwner.slice(),
-      keyInit: keyInit.slice(),
-      letterDomains: letterDomains.map(arr => arr.slice()),
-      letterDomainSizes: letterDomainSizes.slice(),
-      keyDomains: keyDomains.map(arr => arr.slice()),
-      keyDomainSizes: keyDomainSizes.slice()
-    };
-  }
-
-  function restore(state){
-    for (let i=0; i<N; i++){
-      pos[i] = state.pos[i];
-      used[i] = state.used[i];
-      cipherOwner[i] = state.cipherOwner[i];
-      const destDom = letterDomains[i];
-      const srcDom = state.letterDomains[i];
-      for (let v=0; v<N; v++) destDom[v] = srcDom[v];
-    }
-    for (let r=0; r<mLen; r++){
-      keyInit[r] = state.keyInit[r];
-      keyDomainSizes[r] = state.keyDomainSizes[r];
-      const destDom = keyDomains[r];
-      const srcDom = state.keyDomains[r];
-      for (let v=0; v<N; v++) destDom[v] = srcDom[v];
-    }
-    for (let L=0; L<N; L++){
-      letterDomainSizes[L] = state.letterDomainSizes[L];
-    }
-  }
-
-  function finalizeSolution(){
-    const posFull = pos.slice();
-    const usedValues = new Array(N).fill(false);
-    for (let L=0; L<N; L++){
-      const v = posFull[L];
-      if (v !== null) usedValues[v] = true;
-    }
-    const remaining = [];
-    for (let v=0; v<N; v++) if (!usedValues[v]) remaining.push(v);
-    for (let L=0; L<N; L++){
-      if (posFull[L] === null){
-        const next = remaining.length ? remaining.shift() : 0;
-        posFull[L] = next;
-      }
-    }
-    const keyFull = keyInit.slice();
-    for (let r=0; r<mLen; r++) keyFull[r] = mod(keyFull[r] == null ? 0 : keyFull[r]);
-    return { pos: posFull, k: keyFull };
-  }
-
-  function stateKey(){
-    let out = '';
-    for (let L=0; L<N; L++) out += pos[L] === null ? '_' : pos[L].toString(36);
-    out += '|';
-    for (let r=0; r<mLen; r++) out += keyInit[r] === null ? '_' : keyInit[r].toString(36);
-    return out;
-  }
-
-  const memo = new Set();
   let dfsNodes = 0;
-  let lastPing = typeof performance !== 'undefined' ? performance.now() : 0;
 
-  function dfs(){
-    if (!propagate()) return null;
-    if (isSolved()) return finalizeSolution();
-    const memoKey = stateKey();
-    if (memo.has(memoKey)) return null;
-    const sel = chooseVar();
-    if (!sel) return finalizeSolution();
+  function dfs(state){
+    if (!propagate(state)) return null;
+    if (isSolved(state)) return { pos: state.pos.slice(), k: state.key.slice() };
+    const sel = chooseVar(state);
+    if (!sel) return null;
     dfsNodes++;
-    if (progressCb && dfsNodes % 500 === 0){
-      const now = typeof performance !== 'undefined' ? performance.now() : 0;
-      if (!lastPing || now - lastPing > 120){
-        lastPing = now;
-        progressCb({ kind:'dfs', nodes: dfsNodes });
-      }
+    if (progressCb && dfsNodes % 2000 === 0){
+      progressCb({ kind:'dfs', nodes: dfsNodes });
     }
     if (sel.type === 'letter'){
-      const domain = letterDomainValues(sel.idx);
-      domain.sort((a,b)=>a-b);
-      for (const val of domain){
-        const snap = snapshot();
-        const res = assignLetter(sel.idx, val, null);
-        if (!res.ok){ restore(snap); continue; }
-        const out = dfs();
-        if (out) return out;
-        restore(snap);
+      const values = maskValues(state.letterDomains[sel.idx]);
+      for (const val of values){
+        const next = cloneState(state);
+        if (!setLetter(next, sel.idx, val, null)) continue;
+        const res = dfs(next);
+        if (res) return res;
       }
     } else {
-      const domain = keyDomainValues(sel.idx);
-      domain.sort((a,b)=>a-b);
-      for (const val of domain){
-        const snap = snapshot();
-        const res = assignKey(sel.idx, val, null);
-        if (!res.ok){ restore(snap); continue; }
-        const out = dfs();
-        if (out) return out;
-        restore(snap);
+      const values = maskValues(state.keyDomains[sel.idx]);
+      for (const val of values){
+        const next = cloneState(state);
+        if (!setKey(next, sel.idx, val, null)) continue;
+        const res = dfs(next);
+        if (res) return res;
       }
     }
-    memo.add(memoKey);
     return null;
   }
 
-  if (propagateOnly){
-    if (!propagate()) return false;
-    if (isSolved()) return true;
+  function quickSolve(state){
+    if (!propagate(state)) return false;
+    if (isSolved(state)) return true;
     if (MAX_TRIALS <= 0 || TRIAL_DEPTH <= 0) return false;
-    const baseline = snapshot();
+    const baseSnap = cloneState(state);
     for (let t=0; t<MAX_TRIALS; t++){
-      restore(baseline);
-      let success = true;
+      let trial = cloneState(baseSnap);
+      let ok = true;
       for (let depth=0; depth<TRIAL_DEPTH; depth++){
-        const sel = chooseVar();
-        if (!sel) break;
-        const domain = sel.type === 'letter' ? letterDomainValues(sel.idx) : keyDomainValues(sel.idx);
-        if (!domain.length){ success = false; break; }
-        const tries = Math.min(3, domain.length);
-        let progressed = false;
-        for (let i=0; i<tries; i++){
-          const val = domain[(t + depth + i) % domain.length];
-          const snap = snapshot();
-          const res = sel.type === 'letter' ? assignLetter(sel.idx, val, null) : assignKey(sel.idx, val, null);
-          if (!res.ok){ restore(snap); continue; }
-          if (!propagate()){ restore(snap); continue; }
-          progressed = true;
-          break;
+        if (!propagate(trial)){ ok=false; break; }
+        if (isSolved(trial)) return true;
+        const sel = chooseVar(trial);
+        if (!sel){ ok=false; break; }
+        const domain = sel.type === 'letter'
+          ? maskValues(trial.letterDomains[sel.idx])
+          : maskValues(trial.keyDomains[sel.idx]);
+        if (!domain.length){ ok=false; break; }
+        const val = domain[(t + depth) % domain.length];
+        if (sel.type === 'letter'){
+          if (!setLetter(trial, sel.idx, val, null)){ ok=false; break; }
+        } else {
+          if (!setKey(trial, sel.idx, val, null)){ ok=false; break; }
         }
-        if (!progressed){ success = false; break; }
       }
-      if (success){
-        if (isSolved()) return true;
-        if (propagate()) return true;
+      if (ok){
+        if (!propagate(trial)) continue;
+        if (isSolved(trial)) return true;
       }
     }
     return false;
   }
 
-  const sol = dfs();
+  if (propagateOnly){
+    if (!propagate(state)) return false;
+    if (isSolved(state)) return true;
+    return quickSolve(state);
+  }
+
+  const sol = dfs(state);
   if (!sol) return null;
   return sol;
 }
@@ -2248,6 +2007,7 @@ try{
           return { stepPlain, stepCipher, conflict:false };
         }
 
+        
         function prepareAutokeyBaseState(assignments, m){
           const N = 26;
           if (!assignments || assignments.conflict) return null;
@@ -2256,758 +2016,359 @@ try{
           const stepCipher = assignments.stepCipher;
           if (!stepPlain || !stepPlain.size) return null;
           const constraints = [];
-          const letterDeg = new Array(N).fill(0);
-          const letterFeedDeg = new Array(N).fill(0);
-          const keyDeg = new Array(m).fill(0);
+          const letterAdj = Array.from({length:N}, ()=>[]);
+          const keyAdj = Array.from({length:m}, ()=>[]);
           const steps = Array.from(stepPlain.keys()).sort((a,b)=>a-b);
           for (const step of steps){
             const pSym = stepPlain.get(step);
             const cSym = stepCipher.get(step);
             if (pSym == null || cSym == null) continue;
             if (step < m){
-              constraints.push({ type:'init', idx:step, pSym, cSym });
-              keyDeg[step]++;
+              const idx = constraints.length;
+              constraints.push({ type:'init', p:pSym, c:cSym, k:step });
+              letterAdj[pSym].push(idx);
+              letterAdj[cSym].push(idx);
+              keyAdj[step].push(idx);
             }
             const depStep = step - m;
             if (depStep >= 0 && stepPlain.has(depStep)){
               const depSym = stepPlain.get(depStep);
-              constraints.push({ type:'feed', idx:step, pSym, cSym, depSym });
-              letterFeedDeg[depSym]++;
+              const idx = constraints.length;
+              constraints.push({ type:'feed', p:pSym, c:cSym, dep:depSym });
+              letterAdj[pSym].push(idx);
+              letterAdj[cSym].push(idx);
+              letterAdj[depSym].push(idx);
             }
-            letterDeg[pSym]++;
-            letterDeg[cSym]++;
           }
           if (!constraints.length) return null;
-          const letterToConstraints = Array.from({length:N}, ()=>[]);
-          const keyToConstraints = Array.from({length:m}, ()=>[]);
-          constraints.forEach((cons, idx)=>{
-            letterToConstraints[cons.pSym].push(idx);
-            letterToConstraints[cons.cSym].push(idx);
-            if (cons.type === 'feed') letterToConstraints[cons.depSym].push(idx);
-            if (cons.type === 'init') keyToConstraints[cons.idx].push(idx);
-          });
-          const base = {
+          const FULL_MASK = (1<<26) - 1;
+          return {
             m,
             constraints,
-            letterDeg,
-            letterFeedDeg,
-            keyDeg,
-            letterToConstraints,
-            keyToConstraints,
+            letterAdj,
+            keyAdj,
             stepPlain,
-            stepCipher
+            stepCipher,
+            letterDomainsTemplate: new Array(N).fill(FULL_MASK),
+            letterDomainSizesTemplate: new Array(N).fill(26),
+            keyDomainsTemplate: new Array(m).fill(FULL_MASK),
+            keyDomainSizesTemplate: new Array(m).fill(26)
           };
-          base.posTemplate = new Array(N).fill(null);
-          base.usedTemplate = new Array(N).fill(false);
-          base.cipherOwnerTemplate = new Array(N).fill(-1);
-          base.keyTemplate = new Array(m).fill(null);
-          base.letterDomainsTemplate = Array.from({length:N}, ()=>Array(N).fill(1));
-          base.letterDomainSizesTemplate = new Array(N).fill(N);
-          base.keyDomainsTemplate = Array.from({length:m}, ()=>Array(N).fill(1));
-          base.keyDomainSizesTemplate = new Array(m).fill(N);
-          let anchor=-1, bestScore=-1;
-          for (let L=0; L<N; L++){
-            const deg = letterDeg[L];
-            if (!deg) continue;
-            const score = deg * 8 + (letterFeedDeg[L] || 0);
-            if (score > bestScore){ bestScore = score; anchor = L; }
-          }
-          if (anchor !== -1){
-            base.anchor = anchor;
-            base.anchorValue = 0;
-            base.posTemplate[anchor] = 0;
-            base.usedTemplate[0] = true;
-            base.cipherOwnerTemplate[0] = anchor;
-            const dom = base.letterDomainsTemplate[anchor];
-            for (let i=0; i<N; i++) dom[i] = (i === 0) ? 1 : 0;
-            base.letterDomainSizesTemplate[anchor] = 1;
-          }
-          return base;
         }
-
         function instantiateAutokeyState(base){
           return {
-            pos: base.posTemplate.slice(),
-            used: base.usedTemplate.slice(),
-            cipherOwner: base.cipherOwnerTemplate.slice(),
-            keyInit: base.keyTemplate.slice(),
-            letterDomains: base.letterDomainsTemplate.map(arr => arr.slice()),
+            pos: new Array(26).fill(null),
+            key: new Array(base.m).fill(null),
+            letterDomains: base.letterDomainsTemplate.slice(),
             letterDomainSizes: base.letterDomainSizesTemplate.slice(),
-            keyDomains: base.keyDomainsTemplate.map(arr => arr.slice()),
-            keyDomainSizes: base.keyDomainSizesTemplate.slice()
+            keyDomains: base.keyDomainsTemplate.slice(),
+            keyDomainSizes: base.keyDomainSizesTemplate.slice(),
+            used: new Array(26).fill(false)
           };
         }
+function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
+  const N = 26;
+  if (!Number.isFinite(m) || m <= 0) return null;
+  options = options || {};
+  let base = options.baseState;
+  if (!base){
+    const assignments = buildAutokeyStepAssignments(letters, cribMap);
+    if (!assignments || assignments.conflict) return null;
+    if (!assignments.stepPlain || !assignments.stepPlain.size) return null;
+    base = prepareAutokeyBaseState(assignments, m);
+    if (!base) return null;
+  } else if (base.m !== m){
+    return null;
+  }
 
-        function englishFitness(upArr){
-          const FREQ = {'E':12.0,'T':9.1,'A':8.2,'O':7.5,'I':7.0,'N':6.7,'S':6.3,'R':6.0,'H':6.1,'L':4.0,'D':4.3,'C':2.8,'U':2.8,'M':2.4,'F':2.2,'Y':2.0,'W':2.4,'G':2.0,'P':1.9,'B':1.5,'V':1.0,'K':0.8,'X':0.2,'Q':0.1,'J':0.15,'Z':0.07};
-          const n = upArr.length||1;
-          const cnt={}; for (const ch of upArr){ cnt[ch]=(cnt[ch]||0)+1; }
-          let chi=0; for (const ch of A){ const obs=(cnt[ch]||0); const exp=FREQ[ch]*n/100; if (exp>0) chi += (obs-exp)*(obs-exp)/exp; }
-          return -chi;
+  const FULL_MASK = (1<<26) - 1;
+  const state = instantiateAutokeyState(base);
+  const progressCb = options.progressCb;
+  const propagateOnly = !!options.propagateOnly;
+  const MAX_TRIALS = Number.isFinite(options.quickTrials) ? Math.max(0, options.quickTrials|0) : 30;
+  const TRIAL_DEPTH = Number.isFinite(options.trialDepth) ? Math.max(0, options.trialDepth|0) : 3;
+
+  function popcount(mask){
+    mask = mask >>> 0;
+    mask = mask - ((mask >>> 1) & 0x55555555);
+    mask = (mask & 0x33333333) + ((mask >>> 2) & 0x33333333);
+    return (((mask + (mask >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
+  }
+
+  function maskValues(mask){
+    const vals = [];
+    let bit = 0;
+    while (mask){
+      if (mask & 1) vals.push(bit);
+      mask >>>= 1;
+      bit++;
+    }
+    return vals;
+  }
+
+  function setLetter(state, idx, value, queue){
+    const bit = 1 << value;
+    if ((state.letterDomains[idx] & bit) === 0) return false;
+    if (state.pos[idx] !== null){
+      return state.pos[idx] === value;
+    }
+    state.pos[idx] = value;
+    state.letterDomains[idx] = bit;
+    state.letterDomainSizes[idx] = 1;
+    state.used[value] = true;
+    if (queue){
+      for (const consIdx of base.letterAdj[idx]) queue.push(consIdx);
+    }
+    for (let L=0; L<26; L++){
+      if (L === idx) continue;
+      if (state.pos[L] !== null) continue;
+      if (state.letterDomains[L] & bit){
+        state.letterDomains[L] &= ~bit;
+        const sz = popcount(state.letterDomains[L]);
+        if (sz === 0) return false;
+        state.letterDomainSizes[L] = sz;
+        if (queue){
+          for (const consIdx of base.letterAdj[L]) queue.push(consIdx);
         }
-        function solveVigUnknownAlphabet(letters, cribMap, m, progressCb){
-          const N=26;
-          const segments = collectContiguousCribs(letters, cribMap);
-          const { cLetters, absToLetterStep } = buildLetterStreams(letters);
-          const cons=[];
-          for (const seg of segments){
-            let letterIdx=-1;
-            for (let i=0, seen=0; i<letters.length; i++){
-              if (isLetter(letters[i])){
-                if (i === seg.start){ letterIdx=seen; break; }
-                seen++;
-              }
-            }
-            if (letterIdx < 0) continue;
-            for (let t=0; t<seg.cipherSeg.length; t++){
-              const pSym = A2I[seg.plainSeg[t]];
-              const cSym = A2I[seg.cipherSeg[t]];
-              const r = (letterIdx + t) % m;
-              cons.push({ r, pSym, cSym });
-            }
-          }
-          if (!cons.length) return null;
-          const byR = Array.from({length:m},()=>[]);
-          cons.forEach(c => byR[c.r].push(c));
-          const pos = new Array(N).fill(null);
-          const used = new Array(N).fill(false);
-          const k   = new Array(m).fill(null);
-          const deg = new Array(N).fill(0);
-          for (const {pSym,cSym} of cons){ deg[pSym]++; deg[cSym]++; }
-          let anchor=-1, best=-1;
-          for (let L=0; L<N; L++){ if (deg[L]>best){ best=deg[L]; anchor=L; } }
-          if (anchor!==-1){ pos[anchor]=0; used[0]=true; }
-          const mod = (x)=>((x%26)+26)%26;
-          function propagate(){
-            let changed=true;
-            while(changed){
-              changed=false;
-              for (const {r,pSym,cSym} of cons){
-                const a=pos[pSym], b=pos[cSym];
-                if (a!==null && b!==null){
-                  const need=mod(b-a);
-                  if (k[r]===null){ k[r]=need; changed=true; }
-                  else if (k[r]!==need) return false;
-                } else if (k[r]!==null){
-                  if (a!==null && b===null){
-                    const need=mod(a+k[r]);
-                    if (used[need] && pos[cSym]!==need) return false;
-                    if (pos[cSym]===null){ pos[cSym]=need; used[need]=true; changed=true; }
-                    else if (pos[cSym]!==need) return false;
-                  } else if (a===null && b!==null){
-                    const need=mod(b-k[r]);
-                    if (used[need] && pos[pSym]!==need) return false;
-                    if (pos[pSym]===null){ pos[pSym]=need; used[need]=true; changed=true; }
-                    else if (pos[pSym]!==need) return false;
-                  }
-                }
-              }
-              const seen = new Set();
-              for (let L=0; L<N; L++){
-                const v = pos[L];
-                if (v===null) continue;
-                if (seen.has(v)) return false;
-                seen.add(v);
-              }
-            }
-            return true;
-          }
-          function chooseVar(){
-            let rr=-1, best=-1;
-            for (let r=0;r<m;r++){ if (k[r]===null && byR[r].length>best){best=byR[r].length; rr=r;} }
-            if (rr!==-1) return {type:'r', idx:rr};
-            const appear=new Set(); cons.forEach(({pSym,cSym})=>{appear.add(pSym); appear.add(cSym);});
-            const counts=new Array(N).fill(0); cons.forEach(({pSym,cSym})=>{counts[pSym]++; counts[cSym]++;});
-            let bestL=-1, b=-1;
-            for (let L=0; L<26; L++){ if (!appear.has(L)) continue; if (pos[L]===null && counts[L]>b){ b=counts[L]; bestL=L; } }
-            if (bestL!==-1) return {type:'p', idx:bestL};
-            return null;
-          }
-          function snap(){ return { pos: pos.slice(), used: used.slice(), k: k.slice() }; }
-          function restore(S){ for (let i=0;i<26;i++){ pos[i]=S.pos[i]; used[i]=S.used[i]; } for (let i=0;i<m;i++){ k[i]=S.k[i]; } }
-          let nodes=0, lastPing=0;
-          function dfs(){
-            if (!propagate()) return null;
-            const sel = chooseVar();
-            if (!sel){
-              const posFull = pos.slice();
-              const free=[]; for (let v=0; v<26; v++){ if (!used[v]) free.push(v); }
-              for (let L=0; L<26; L++){ if (posFull[L]===null) posFull[L]=free.shift(); }
-              const key = k.map(x=>x===null?0:x);
-              return { pos: posFull, k: key };
-            }
-            nodes++;
-            const now = (typeof performance!=='undefined'?performance.now():0);
-            if (now - lastPing > 120){ lastPing = now; progressCb && progressCb({kind:'dfs', nodes}); }
-            if (sel.type === 'r'){
-              const r = sel.idx;
-              let cand=null;
-              for (const {pSym,cSym} of byR[r]){
-                if (pos[pSym]!==null && pos[cSym]!==null){ cand=[mod(pos[cSym]-pos[pSym])]; break; }
-              }
-              if (!cand){
-                const diffs=new Set();
-                const g = byR[r];
-                for (let i=0;i<g.length;i++){
-                  for (let j=i+1;j<g.length;j++){
-                    const a=g[i], b=g[j];
-                    if (a.pSym===b.pSym){
-                      const p=a.pSym;
-                      if (pos[p]!==null && pos[a.cSym]!==null) diffs.add(mod(pos[a.cSym]-pos[p]));
-                      if (pos[p]!==null && pos[b.cSym]!==null) diffs.add(mod(pos[b.cSym]-pos[p]));
-                    }
-                    if (a.cSym===b.cSym){
-                      const c=a.cSym;
-                      if (pos[c]!==null && pos[a.pSym]!==null) diffs.add(mod(pos[c]-pos[a.pSym]));
-                      if (pos[c]!==null && pos[b.pSym]!==null) diffs.add(mod(pos[c]-pos[b.pSym]));
-                    }
-                  }
-                }
-                cand = diffs.size ? Array.from(diffs) : [...Array(26).keys()];
-              }
-              for (const val of cand){
-                const S = snap(); k[r]=val;
-                const res = dfs(); if (res) return res;
-                restore(S);
-              }
-              return null;
-            } else {
-              const L = sel.idx;
-              const free=[]; for (let v=0; v<26; v++){ if (!used[v]) free.push(v); }
-              for (const v of free){
-                const S = snap(); pos[L]=v; used[v]=true;
-                const res = dfs(); if (res) return res;
-                restore(S);
-              }
-              return null;
-            }
-          }
-          return dfs();
+        if (sz === 1){
+          const nextVal = maskValues(state.letterDomains[L])[0];
+          if (!setLetter(state, L, nextVal, queue)) return false;
         }
-        function decryptWithCustomAlphabet(letters, pos, k){
-          const inv = new Array(26); for (let L=0; L<26; L++) inv[pos[L]] = String.fromCharCode(65+L);
-          let out=''; let step=0;
-          for (let i=0;i<letters.length;i++){
-            const ch=letters[i];
-            if (!isLetter(ch)){ out+=ch; continue; }
-            const cIdx = pos[ch.toUpperCase().charCodeAt(0)-65];
-            const pIdx = ((cIdx - k[step % k.length]) % 26 + 26) % 26;
-            out += inv[pIdx];
-            step++;
-          }
-          return out;
+      }
+    }
+    return true;
+  }
+
+  function restrictLetter(state, idx, allowed, queue){
+    const next = state.letterDomains[idx] & allowed;
+    if (next === 0) return false;
+    if (next === state.letterDomains[idx]) return true;
+    state.letterDomains[idx] = next;
+    const sz = popcount(next);
+    state.letterDomainSizes[idx] = sz;
+    if (queue){
+      for (const consIdx of base.letterAdj[idx]) queue.push(consIdx);
+    }
+    if (sz === 1){
+      const val = maskValues(next)[0];
+      if (!setLetter(state, idx, val, queue)) return false;
+    }
+    return true;
+  }
+
+  function setKey(state, idx, value, queue){
+    const bit = 1 << value;
+    if ((state.keyDomains[idx] & bit) === 0) return false;
+    if (state.key[idx] !== null) return state.key[idx] === value;
+    state.key[idx] = value;
+    state.keyDomains[idx] = bit;
+    state.keyDomainSizes[idx] = 1;
+    if (queue){
+      for (const consIdx of base.keyAdj[idx]) queue.push(consIdx);
+    }
+    return true;
+  }
+
+  function restrictKey(state, idx, allowed, queue){
+    const next = state.keyDomains[idx] & allowed;
+    if (next === 0) return false;
+    if (next === state.keyDomains[idx]) return true;
+    state.keyDomains[idx] = next;
+    const sz = popcount(next);
+    state.keyDomainSizes[idx] = sz;
+    if (queue){
+      for (const consIdx of base.keyAdj[idx]) queue.push(consIdx);
+    }
+    if (sz === 1){
+      const val = maskValues(next)[0];
+      if (!setKey(state, idx, val, queue)) return false;
+    }
+    return true;
+  }
+
+  function processInit(state, cons, queue){
+    const pMask = state.letterDomains[cons.p];
+    const cMask = state.letterDomains[cons.c];
+    const kMask = state.keyDomains[cons.k];
+    if (!pMask || !cMask || !kMask) return false;
+    let allowedK = 0;
+    for (const pVal of maskValues(pMask)){
+      for (const cVal of maskValues(cMask)){
+        allowedK |= 1 << ((cVal - pVal + 26) % 26);
+      }
+    }
+    if (!restrictKey(state, cons.k, allowedK, queue)) return false;
+    let allowedP = 0;
+    for (const cVal of maskValues(state.letterDomains[cons.c])){
+      for (const kVal of maskValues(state.keyDomains[cons.k])){
+        allowedP |= 1 << ((cVal - kVal + 26) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.p, allowedP, queue)) return false;
+    let allowedC = 0;
+    for (const pVal of maskValues(state.letterDomains[cons.p])){
+      for (const kVal of maskValues(state.keyDomains[cons.k])){
+        allowedC |= 1 << ((pVal + kVal) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.c, allowedC, queue)) return false;
+    return true;
+  }
+
+  function processFeed(state, cons, queue){
+    const pMask = state.letterDomains[cons.p];
+    const cMask = state.letterDomains[cons.c];
+    const dMask = state.letterDomains[cons.dep];
+    if (!pMask || !cMask || !dMask) return false;
+    let allowedC = 0;
+    for (const pVal of maskValues(pMask)){
+      for (const dVal of maskValues(dMask)){
+        allowedC |= 1 << ((pVal + dVal) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.c, allowedC, queue)) return false;
+    let allowedP = 0;
+    for (const cVal of maskValues(state.letterDomains[cons.c])){
+      for (const dVal of maskValues(dMask)){
+        allowedP |= 1 << ((cVal - dVal + 26) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.p, allowedP, queue)) return false;
+    let allowedD = 0;
+    for (const cVal of maskValues(state.letterDomains[cons.c])){
+      for (const pVal of maskValues(state.letterDomains[cons.p])){
+        allowedD |= 1 << ((cVal - pVal + 26) % 26);
+      }
+    }
+    if (!restrictLetter(state, cons.dep, allowedD, queue)) return false;
+    return true;
+  }
+
+  function propagate(state){
+    const queue = [];
+    for (let i=0; i<base.constraints.length; i++) queue.push(i);
+    while (queue.length){
+      const idx = queue.pop();
+      const cons = base.constraints[idx];
+      const ok = cons.type === 'init'
+        ? processInit(state, cons, queue)
+        : processFeed(state, cons, queue);
+      if (!ok) return false;
+    }
+    return true;
+  }
+
+  function isSolved(state){
+    for (let L=0; L<26; L++) if (state.letterDomainSizes[L] !== 1) return false;
+    for (let r=0; r<base.m; r++) if (state.keyDomainSizes[r] !== 1) return false;
+    return true;
+  }
+
+  function cloneState(state){
+    return {
+      pos: state.pos.slice(),
+      key: state.key.slice(),
+      letterDomains: state.letterDomains.slice(),
+      letterDomainSizes: state.letterDomainSizes.slice(),
+      keyDomains: state.keyDomains.slice(),
+      keyDomainSizes: state.keyDomainSizes.slice(),
+      used: state.used.slice()
+    };
+  }
+
+  function chooseVar(state){
+    let bestLetter = -1;
+    let bestSize = Infinity;
+    for (let L=0; L<26; L++){
+      const sz = state.letterDomainSizes[L];
+      if (sz <= 1) continue;
+      if (sz < bestSize){ bestSize = sz; bestLetter = L; }
+    }
+    if (bestLetter !== -1) return { type:'letter', idx:bestLetter };
+    let bestKey = -1;
+    bestSize = Infinity;
+    for (let r=0; r<base.m; r++){
+      const sz = state.keyDomainSizes[r];
+      if (sz <= 1) continue;
+      if (sz < bestSize){ bestSize = sz; bestKey = r; }
+    }
+    if (bestKey !== -1) return { type:'key', idx:bestKey };
+    return null;
+  }
+
+  let dfsNodes = 0;
+
+  function dfs(state){
+    if (!propagate(state)) return null;
+    if (isSolved(state)) return { pos: state.pos.slice(), k: state.key.slice() };
+    const sel = chooseVar(state);
+    if (!sel) return null;
+    dfsNodes++;
+    if (progressCb && dfsNodes % 2000 === 0){
+      progressCb({ kind:'dfs', nodes: dfsNodes });
+    }
+    if (sel.type === 'letter'){
+      const values = maskValues(state.letterDomains[sel.idx]);
+      for (const val of values){
+        const next = cloneState(state);
+        if (!setLetter(next, sel.idx, val, null)) continue;
+        const res = dfs(next);
+        if (res) return res;
+      }
+    } else {
+      const values = maskValues(state.keyDomains[sel.idx]);
+      for (const val of values){
+        const next = cloneState(state);
+        if (!setKey(next, sel.idx, val, null)) continue;
+        const res = dfs(next);
+        if (res) return res;
+      }
+    }
+    return null;
+  }
+
+  function quickSolve(state){
+    if (!propagate(state)) return false;
+    if (isSolved(state)) return true;
+    if (MAX_TRIALS <= 0 || TRIAL_DEPTH <= 0) return false;
+    const baseSnap = cloneState(state);
+    for (let t=0; t<MAX_TRIALS; t++){
+      let trial = cloneState(baseSnap);
+      let ok = true;
+      for (let depth=0; depth<TRIAL_DEPTH; depth++){
+        if (!propagate(trial)){ ok=false; break; }
+        if (isSolved(trial)) return true;
+        const sel = chooseVar(trial);
+        if (!sel){ ok=false; break; }
+        const domain = sel.type === 'letter'
+          ? maskValues(trial.letterDomains[sel.idx])
+          : maskValues(trial.keyDomains[sel.idx]);
+        if (!domain.length){ ok=false; break; }
+        const val = domain[(t + depth) % domain.length];
+        if (sel.type === 'letter'){
+          if (!setLetter(trial, sel.idx, val, null)){ ok=false; break; }
+        } else {
+          if (!setKey(trial, sel.idx, val, null)){ ok=false; break; }
         }
-        function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
-          const N = 26;
-          if (!Number.isFinite(m) || m <= 0) return null;
-          options = options || {};
-          let base = options.baseState;
-          if (!base){
-            const assignments = buildAutokeyStepAssignments(letters, cribMap);
-            if (!assignments || assignments.conflict) return null;
-            if (!assignments.stepPlain || !assignments.stepPlain.size) return null;
-            base = prepareAutokeyBaseState(assignments, m);
-            if (!base) return null;
-          } else if (base.m !== m){
-            return null;
-          }
-          const propagateOnly = !!options.propagateOnly;
-          const MAX_TRIALS = Number.isFinite(options.quickTrials) ? Math.max(0, options.quickTrials|0) : 30;
-          const TRIAL_DEPTH = Number.isFinite(options.trialDepth) ? Math.max(0, options.trialDepth|0) : 3;
-          const progressCb = options.progressCb;
+      }
+      if (ok){
+        if (!propagate(trial)) continue;
+        if (isSolved(trial)) return true;
+      }
+    }
+    return false;
+  }
 
-          const state = instantiateAutokeyState(base);
-          const pos = state.pos;
-          const used = state.used;
-          const cipherOwner = state.cipherOwner;
-          const keyInit = state.keyInit;
-          const letterDomains = state.letterDomains;
-          const letterDomainSizes = state.letterDomainSizes;
-          const keyDomains = state.keyDomains;
-          const keyDomainSizes = state.keyDomainSizes;
+  if (propagateOnly){
+    if (!propagate(state)) return false;
+    if (isSolved(state)) return true;
+    return quickSolve(state);
+  }
 
-          const constraints = base.constraints;
-          if (!constraints || !constraints.length) return null;
-          const letterToConstraints = base.letterToConstraints;
-          const keyToConstraints = base.keyToConstraints;
-          const letterDeg = base.letterDeg;
-          const letterFeedDeg = base.letterFeedDeg || new Array(N).fill(0);
-          const keyDeg = base.keyDeg;
-          const anchor = base.anchor;
-          const anchorValue = base.anchorValue || 0;
-          const mLen = base.m;
-
-          const mod = (x)=>((x%N)+N)%N;
-
-          function letterDomainValues(idx){
-            const arr = [];
-            const dom = letterDomains[idx];
-            for (let v=0; v<N; v++) if (dom[v]) arr.push(v);
-            return arr;
-          }
-
-          function keyDomainValues(idx){
-            const arr = [];
-            const dom = keyDomains[idx];
-            for (let v=0; v<N; v++) if (dom[v]) arr.push(v);
-            return arr;
-          }
-
-          function assignLetter(idx, value, ctx){
-            if (idx == null) return { ok:true, changed:false };
-            value = mod(value);
-            const current = pos[idx];
-            if (current !== null){
-              return { ok: current === value, changed:false };
-            }
-            const owner = cipherOwner[value];
-            if (owner !== -1 && owner !== idx) return { ok:false, changed:false };
-            pos[idx] = value;
-            cipherOwner[value] = idx;
-            used[value] = true;
-            const dom = letterDomains[idx];
-            for (let v=0; v<N; v++) dom[v] = (v === value) ? 1 : 0;
-            letterDomainSizes[idx] = 1;
-            if (ctx){
-              for (const consIdx of letterToConstraints[idx]) ctx.enqueue(consIdx);
-            }
-            for (let L=0; L<N; L++){
-              if (L === idx) continue;
-              if (pos[L] !== null) continue;
-              if (letterDomains[L][value]){
-                letterDomains[L][value] = 0;
-                letterDomainSizes[L]--;
-                if (letterDomainSizes[L] <= 0) return { ok:false, changed:true };
-                if (ctx){
-                  for (const consIdx of letterToConstraints[L]) ctx.enqueue(consIdx);
-                }
-              }
-            }
-            return { ok:true, changed:true };
-          }
-
-          function assignKey(idx, value, ctx){
-            if (idx == null) return { ok:true, changed:false };
-            value = mod(value);
-            const current = keyInit[idx];
-            if (current !== null){
-              return { ok: current === value, changed:false };
-            }
-            keyInit[idx] = value;
-            const dom = keyDomains[idx];
-            for (let v=0; v<N; v++) dom[v] = (v === value) ? 1 : 0;
-            keyDomainSizes[idx] = 1;
-            if (ctx){
-              for (const consIdx of keyToConstraints[idx]) ctx.enqueue(consIdx);
-            }
-            return { ok:true, changed:true };
-          }
-
-          function restrictLetterDomain(idx, allowed, ctx){
-            if (idx == null) return { ok:true, changed:false };
-            if (pos[idx] !== null){
-              return { ok: !!allowed[pos[idx]], changed:false };
-            }
-            const dom = letterDomains[idx];
-            let changed = false;
-            let size = letterDomainSizes[idx];
-            for (let v=0; v<N; v++){
-              if (!dom[v]) continue;
-              if (!allowed[v]){
-                dom[v] = 0;
-                size--;
-                changed = true;
-              }
-            }
-            if (size <= 0) return { ok:false, changed:true };
-            if (changed){
-              letterDomainSizes[idx] = size;
-              if (ctx){
-                for (const consIdx of letterToConstraints[idx]) ctx.enqueue(consIdx);
-              }
-            }
-            return { ok:true, changed };
-          }
-
-          function restrictKeyDomain(idx, allowed, ctx){
-            if (idx == null) return { ok:true, changed:false };
-            if (keyInit[idx] !== null){
-              return { ok: !!allowed[keyInit[idx]], changed:false };
-            }
-            const dom = keyDomains[idx];
-            let changed = false;
-            let size = keyDomainSizes[idx];
-            for (let v=0; v<N; v++){
-              if (!dom[v]) continue;
-              if (!allowed[v]){
-                dom[v] = 0;
-                size--;
-                changed = true;
-              }
-            }
-            if (size <= 0) return { ok:false, changed:true };
-            if (changed){
-              keyDomainSizes[idx] = size;
-              if (ctx){
-                for (const consIdx of keyToConstraints[idx]) ctx.enqueue(consIdx);
-              }
-            }
-            return { ok:true, changed };
-          }
-
-          function processInit(cons, ctx){
-            const p = cons.pSym;
-            const c = cons.cSym;
-            const r = cons.idx;
-            const a = pos[p];
-            const b = pos[c];
-            const keyVal = keyInit[r];
-            if (a !== null && b !== null){
-              const res = assignKey(r, b - a, ctx);
-              if (!res.ok) return false;
-            }
-            if (a !== null && keyVal !== null){
-              const res = assignLetter(c, a + keyVal, ctx);
-              if (!res.ok) return false;
-            }
-            if (b !== null && keyVal !== null){
-              const res = assignLetter(p, b - keyVal, ctx);
-              if (!res.ok) return false;
-            }
-            const pVals = a !== null ? [a] : letterDomainValues(p);
-            const cVals = b !== null ? [b] : letterDomainValues(c);
-            const kVals = keyVal !== null ? [keyVal] : keyDomainValues(r);
-            if (!pVals.length || !cVals.length || !kVals.length) return false;
-            if (keyVal === null){
-              const allowedKey = new Array(N).fill(0);
-              for (const pa of pVals){
-                for (const cb of cVals){
-                  allowedKey[mod(cb - pa)] = 1;
-                }
-              }
-              const res = restrictKeyDomain(r, allowedKey, ctx);
-              if (!res.ok) return false;
-            }
-            if (a === null){
-              const allowedP = new Array(N).fill(0);
-              for (const cb of cVals){
-                for (const kv of kVals){
-                  allowedP[mod(cb - kv)] = 1;
-                }
-              }
-              const res = restrictLetterDomain(p, allowedP, ctx);
-              if (!res.ok) return false;
-            }
-            if (b === null){
-              const allowedC = new Array(N).fill(0);
-              for (const pa of pVals){
-                for (const kv of kVals){
-                  allowedC[mod(pa + kv)] = 1;
-                }
-              }
-              const res = restrictLetterDomain(c, allowedC, ctx);
-              if (!res.ok) return false;
-            }
-            return true;
-          }
-
-          function processFeed(cons, ctx){
-            const p = cons.pSym;
-            const c = cons.cSym;
-            const dep = cons.depSym;
-            const a = pos[p];
-            const b = pos[c];
-            const d = pos[dep];
-            if (a !== null && d !== null){
-              const res = assignLetter(c, a + d, ctx);
-              if (!res.ok) return false;
-            }
-            if (b !== null && a !== null){
-              const res = assignLetter(dep, b - a, ctx);
-              if (!res.ok) return false;
-            }
-            if (b !== null && d !== null){
-              const res = assignLetter(p, b - d, ctx);
-              if (!res.ok) return false;
-            }
-            const pVals = a !== null ? [a] : letterDomainValues(p);
-            const cVals = b !== null ? [b] : letterDomainValues(c);
-            const dVals = d !== null ? [d] : letterDomainValues(dep);
-            if (!pVals.length || !cVals.length || !dVals.length) return false;
-            if (b === null){
-              const allowedC = new Array(N).fill(0);
-              for (const pa of pVals){
-                for (const dv of dVals){
-                  allowedC[mod(pa + dv)] = 1;
-                }
-              }
-              const res = restrictLetterDomain(c, allowedC, ctx);
-              if (!res.ok) return false;
-            }
-            if (a === null){
-              const allowedP = new Array(N).fill(0);
-              for (const cb of cVals){
-                for (const dv of dVals){
-                  allowedP[mod(cb - dv)] = 1;
-                }
-              }
-              const res = restrictLetterDomain(p, allowedP, ctx);
-              if (!res.ok) return false;
-            }
-            if (d === null){
-              const allowedD = new Array(N).fill(0);
-              for (const cb of cVals){
-                for (const pa of pVals){
-                  allowedD[mod(cb - pa)] = 1;
-                }
-              }
-              const res = restrictLetterDomain(dep, allowedD, ctx);
-              if (!res.ok) return false;
-            }
-            return true;
-          }
-
-          function propagate(){
-            const pending = new Array(constraints.length).fill(false);
-            const queue = [];
-            const ctx = {
-              enqueue(idx){
-                if (idx == null) return;
-                if (!pending[idx]){
-                  pending[idx] = true;
-                  queue.push(idx);
-                }
-              }
-            };
-            if (anchor != null && pos[anchor] === null){
-              const res = assignLetter(anchor, anchorValue, ctx);
-              if (!res.ok) return false;
-            }
-            for (let i=0; i<constraints.length; i++) ctx.enqueue(i);
-            while (true){
-              while (queue.length){
-                const idx = queue.pop();
-                pending[idx] = false;
-                const cons = constraints[idx];
-                const ok = cons.type === 'init' ? processInit(cons, ctx) : processFeed(cons, ctx);
-                if (!ok) return false;
-              }
-              let assigned = false;
-              for (let L=0; L<N; L++){
-                if (pos[L] === null){
-                  if (letterDomainSizes[L] === 0) return false;
-                  if (letterDomainSizes[L] === 1){
-                    const vals = letterDomainValues(L);
-                    if (!vals.length) return false;
-                    const res = assignLetter(L, vals[0], ctx);
-                    if (!res.ok) return false;
-                    assigned = true;
-                  }
-                }
-              }
-              for (let r=0; r<mLen; r++){
-                if (keyInit[r] === null){
-                  if (keyDomainSizes[r] === 0) return false;
-                  if (keyDomainSizes[r] === 1){
-                    const vals = keyDomainValues(r);
-                    if (!vals.length) return false;
-                    const res = assignKey(r, vals[0], ctx);
-                    if (!res.ok) return false;
-                    assigned = true;
-                  }
-                }
-              }
-              if (!assigned) break;
-            }
-            return true;
-          }
-
-          function isSolved(){
-            for (let L=0; L<N; L++) if (pos[L] === null) return false;
-            for (let r=0; r<mLen; r++) if (keyInit[r] === null) return false;
-            return true;
-          }
-
-          function chooseVar(){
-            let bestLetter = -1;
-            let bestLetterScore = Infinity;
-            let bestLetterWeight = -Infinity;
-            for (let L=0; L<N; L++){
-              if (pos[L] !== null) continue;
-              const size = letterDomainSizes[L];
-              if (size <= 0) return { type:'letter', idx:L };
-              const weight = (letterFeedDeg[L] || 0) * 2 + (letterDeg[L] || 0);
-              if (size < bestLetterScore || (size === bestLetterScore && weight > bestLetterWeight)){
-                bestLetter = L;
-                bestLetterScore = size;
-                bestLetterWeight = weight;
-              }
-            }
-            if (bestLetter !== -1) return { type:'letter', idx: bestLetter };
-            let bestKey = -1;
-            let bestKeyScore = Infinity;
-            let bestKeyWeight = -Infinity;
-            for (let r=0; r<mLen; r++){
-              if (keyInit[r] !== null) continue;
-              const size = keyDomainSizes[r];
-              if (size <= 0) return { type:'key', idx:r };
-              const weight = keyDeg[r] || 0;
-              if (size < bestKeyScore || (size === bestKeyScore && weight > bestKeyWeight)){
-                bestKey = r;
-                bestKeyScore = size;
-                bestKeyWeight = weight;
-              }
-            }
-            if (bestKey !== -1) return { type:'key', idx: bestKey };
-            return null;
-          }
-
-          function snapshot(){
-            return {
-              pos: pos.slice(),
-              used: used.slice(),
-              cipherOwner: cipherOwner.slice(),
-              keyInit: keyInit.slice(),
-              letterDomains: letterDomains.map(arr => arr.slice()),
-              letterDomainSizes: letterDomainSizes.slice(),
-              keyDomains: keyDomains.map(arr => arr.slice()),
-              keyDomainSizes: keyDomainSizes.slice()
-            };
-          }
-
-          function restore(state){
-            for (let i=0; i<N; i++){
-              pos[i] = state.pos[i];
-              used[i] = state.used[i];
-              cipherOwner[i] = state.cipherOwner[i];
-              const destDom = letterDomains[i];
-              const srcDom = state.letterDomains[i];
-              for (let v=0; v<N; v++) destDom[v] = srcDom[v];
-            }
-            for (let r=0; r<mLen; r++){
-              keyInit[r] = state.keyInit[r];
-              keyDomainSizes[r] = state.keyDomainSizes[r];
-              const destDom = keyDomains[r];
-              const srcDom = state.keyDomains[r];
-              for (let v=0; v<N; v++) destDom[v] = srcDom[v];
-            }
-            for (let L=0; L<N; L++){
-              letterDomainSizes[L] = state.letterDomainSizes[L];
-            }
-          }
-
-          function finalizeSolution(){
-            const posFull = pos.slice();
-            const usedValues = new Array(N).fill(false);
-            for (let L=0; L<N; L++){
-              const v = posFull[L];
-              if (v !== null) usedValues[v] = true;
-            }
-            const remaining = [];
-            for (let v=0; v<N; v++) if (!usedValues[v]) remaining.push(v);
-            for (let L=0; L<N; L++){
-              if (posFull[L] === null){
-                const next = remaining.length ? remaining.shift() : 0;
-                posFull[L] = next;
-              }
-            }
-            const keyFull = keyInit.slice();
-            for (let r=0; r<mLen; r++) keyFull[r] = mod(keyFull[r] == null ? 0 : keyFull[r]);
-            return { pos: posFull, k: keyFull };
-          }
-
-          function stateKey(){
-            let out = '';
-            for (let L=0; L<N; L++) out += pos[L] === null ? '_' : pos[L].toString(36);
-            out += '|';
-            for (let r=0; r<mLen; r++) out += keyInit[r] === null ? '_' : keyInit[r].toString(36);
-            return out;
-          }
-
-          const memo = new Set();
-          let dfsNodes = 0;
-          let lastPing = typeof performance !== 'undefined' ? performance.now() : 0;
-
-          function dfs(){
-            if (!propagate()) return null;
-            if (isSolved()) return finalizeSolution();
-            const memoKey = stateKey();
-            if (memo.has(memoKey)) return null;
-            const sel = chooseVar();
-            if (!sel) return finalizeSolution();
-            dfsNodes++;
-            if (progressCb && dfsNodes % 500 === 0){
-              const now = typeof performance !== 'undefined' ? performance.now() : 0;
-              if (!lastPing || now - lastPing > 120){
-                lastPing = now;
-                progressCb({ kind:'dfs', nodes: dfsNodes });
-              }
-            }
-            if (sel.type === 'letter'){
-              const domain = letterDomainValues(sel.idx);
-              domain.sort((a,b)=>a-b);
-              for (const val of domain){
-                const snap = snapshot();
-                const res = assignLetter(sel.idx, val, null);
-                if (!res.ok){ restore(snap); continue; }
-                const out = dfs();
-                if (out) return out;
-                restore(snap);
-              }
-            } else {
-              const domain = keyDomainValues(sel.idx);
-              domain.sort((a,b)=>a-b);
-              for (const val of domain){
-                const snap = snapshot();
-                const res = assignKey(sel.idx, val, null);
-                if (!res.ok){ restore(snap); continue; }
-                const out = dfs();
-                if (out) return out;
-                restore(snap);
-              }
-            }
-            memo.add(memoKey);
-            return null;
-          }
-
-          if (propagateOnly){
-            if (!propagate()) return false;
-            if (isSolved()) return true;
-            if (MAX_TRIALS <= 0 || TRIAL_DEPTH <= 0) return false;
-            const baseline = snapshot();
-            for (let t=0; t<MAX_TRIALS; t++){
-              restore(baseline);
-              let success = true;
-              for (let depth=0; depth<TRIAL_DEPTH; depth++){
-                const sel = chooseVar();
-                if (!sel) break;
-                const domain = sel.type === 'letter' ? letterDomainValues(sel.idx) : keyDomainValues(sel.idx);
-                if (!domain.length){ success = false; break; }
-                const tries = Math.min(3, domain.length);
-                let progressed = false;
-                for (let i=0; i<tries; i++){
-                  const val = domain[(t + depth + i) % domain.length];
-                  const snap = snapshot();
-                  const res = sel.type === 'letter' ? assignLetter(sel.idx, val, null) : assignKey(sel.idx, val, null);
-                  if (!res.ok){ restore(snap); continue; }
-                  if (!propagate()){ restore(snap); continue; }
-                  progressed = true;
-                  break;
-                }
-                if (!progressed){ success = false; break; }
-              }
-              if (success){
-                if (isSolved()) return true;
-                if (propagate()) return true;
-              }
-            }
-            return false;
-          }
-
-          const sol = dfs();
-          if (!sol) return null;
-          return sol;
-        }
+  const sol = dfs(state);
+  if (!sol) return null;
+  return sol;
+}
 
         function decryptAutokeyUnknownAlphabet(letters, pos, keyInit){
           const N = 26;
