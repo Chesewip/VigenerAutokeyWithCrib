@@ -2432,18 +2432,34 @@ try{
           let wordsSkipped = msg.preSkipped|0;
           const results = [];
           const progressTotal = Math.max(1, totalWords);
+          const getTime = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+            ? () => performance.now()
+            : () => Date.now();
           const progressMod = (function(len){
             if (len >= 1000) return 100;
             if (len >= 200) return 25;
             if (len >= 50) return 10;
             return 1;
           })(totalWords);
+          let lastProgressAt = getTime();
           const shouldReport = (idx) => {
-            if (progressMod === 1) return true;
-            if (idx === 0 || idx === wordlist.length - 1) return true;
-            return ((idx + 1) % progressMod) === 0;
+            let report = false;
+            if (progressMod === 1) report = true;
+            else if (idx === 0 || idx === wordlist.length - 1) report = true;
+            else if (((idx + 1) % progressMod) === 0) report = true;
+            if (!report){
+              const now = getTime();
+              if (now - lastProgressAt >= 750){
+                report = true;
+              }
+            }
+            if (report){
+              lastProgressAt = getTime();
+            }
+            return report;
           };
           postMessage({ kind:'brute_progress', done:0, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed:0 });
+          lastProgressAt = getTime();
           const minKVal = Number.isFinite(minK) && minK > 0 ? minK : 1;
           const maxKVal = Number.isFinite(maxK) && maxK >= minKVal ? maxK : minKVal;
           const enforceNext = !!msg.bridgeNext;
