@@ -92,6 +92,8 @@
       <input id="quickTrialsInput" type="number" min="0" value="30" style="width:72px" />
       <label class="small muted">Trial depth:</label>
       <input id="trialDepthInput" type="number" min="0" value="3" style="width:72px" />
+      <label class="small muted">Word timeout (ms):</label>
+      <input id="wordTimeoutInput" type="number" min="0" value="1500" style="width:90px" />
       <label class="checkbox-row small" style="padding:0 6px 0 0">
         <input type="checkbox" id="bruteBridgeNext" /> Enforce next crib
       </label>
@@ -140,6 +142,14 @@ function getTrialDepth(){
   const v = parseInt(el.value,10);
   if (Number.isFinite(v) && v >= 0) return v;
   return 3;
+}
+
+function getWordTimeoutMs(){
+  const el = document.getElementById('wordTimeoutInput');
+  if (!el) return 0;
+  const v = parseInt(el.value, 10);
+  if (Number.isFinite(v) && v >= 0) return v;
+  return 0;
 }
 let selectionMode = false;
 let selectionStart = -1;
@@ -822,7 +832,7 @@ function bruteForceWordlist(){
   const wrongLengthSkipped = wordlist.length - filtered.length;
 
   if (filtered.length === 0){
-    displayBruteResults([], startPos, endPos, 0, wrongLengthSkipped, 0, maxResults, { bridgeNext, nextSegmentLen });
+    displayBruteResults([], startPos, endPos, 0, wrongLengthSkipped, 0, maxResults, { bridgeNext, nextSegmentLen, timedOutWords: 0 });
     return;
   }
 
@@ -847,6 +857,7 @@ function bruteForceWordlist(){
     maxResults,
     quickTrials,
     trialDepth,
+    wordTimeoutMs: getWordTimeoutMs(),
     preSkipped: wrongLengthSkipped,
     bridgeNext: !!bridgeNext
   };
@@ -862,6 +873,7 @@ function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipp
   const opts = options || {};
   const bridgeNext = !!opts.bridgeNext;
   const nextSegmentLen = (typeof opts.nextSegmentLen === 'number') ? opts.nextSegmentLen : undefined;
+  const timedOutWords = (typeof opts.timedOutWords === 'number') ? opts.timedOutWords : 0;
   const panel = document.getElementById('bruteResults');
   const summary = document.getElementById('bruteSummary');
   const out = document.getElementById('bruteOut');
@@ -870,7 +882,8 @@ function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipp
   const shown = results.length;
   const total = (typeof totalCandidates === 'number') ? totalCandidates : shown;
   const limit = (typeof maxResults === 'number' && !Number.isNaN(maxResults)) ? maxResults : shown;
-  let text = `Found ${total} consistent cribs at positions ${startPos}-${endPos}. Showing top ${shown} (limit ${limit}). Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words). Sorted by decryption quality.`;
+  const timeoutText = timedOutWords > 0 ? `, timed out ${timedOutWords}` : '';
+  let text = `Found ${total} consistent cribs at positions ${startPos}-${endPos}. Showing top ${shown} (limit ${limit}). Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words${timeoutText}). Sorted by decryption quality.`;
   if (bridgeNext){
     if (nextSegmentLen === undefined){
       text += ' Enforcing next crib segment (length pending).';
@@ -1258,7 +1271,33 @@ function solveVigUnknownAlphabet(letters, cribMap, m, options){
 
 
 function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
+  const opts = (options && typeof options === 'object') ? options : null;
+  if (opts){
+    opts.timedOut = false;
+    opts.visitedNodes = 0;
+  }
   const N = 26;
+  let timedOut = false;
+  let nodeVisits = 0;
+  const maxMillis = (opts && Number.isFinite(opts.maxMillis) && opts.maxMillis > 0) ? opts.maxMillis : null;
+  const maxNodes = (opts && Number.isFinite(opts.maxNodes) && opts.maxNodes > 0) ? opts.maxNodes|0 : null;
+  const timeFn = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? () => performance.now()
+    : () => Date.now();
+  const hasTimeLimit = maxMillis !== null;
+  const startTime = hasTimeLimit ? timeFn() : 0;
+  function limitReached(){
+    if (timedOut) return true;
+    if (hasTimeLimit && (timeFn() - startTime) >= maxMillis){
+      timedOut = true;
+      return true;
+    }
+    if (maxNodes !== null && nodeVisits >= maxNodes){
+      timedOut = true;
+      return true;
+    }
+    return false;
+  }
   if (!Number.isFinite(m) || m <= 0) return null;
   const segments = collectContiguousCribs(letters, cribMap);
   if (!segments.length) return null;
@@ -1411,6 +1450,9 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
   }
 
   function dfs(){
+    if (limitReached()) return null;
+    nodeVisits++;
+    if (limitReached()) return null;
     if (!propagate()) return null;
     const sel = chooseVar();
     if (!sel){
@@ -1462,6 +1504,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
         used[vv] = true;
         const res = dfs();
         if (res) return res;
+        if (timedOut) return null;
         restore(snap);
       }
     } else {
@@ -1479,6 +1522,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
         keyInit[sel.idx] = mod(val);
         const res = dfs();
         if (res) return res;
+        if (timedOut) return null;
         restore(snap);
       }
     }
@@ -1489,7 +1533,12 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options){
     return propagate();
   }
 
-  return dfs();
+  const solved = dfs();
+  if (opts){
+    opts.timedOut = timedOut;
+    opts.visitedNodes = nodeVisits;
+  }
+  return solved;
 }
 
 
@@ -2410,6 +2459,8 @@ try{
           const maxResults = msg.maxResults|0;
           const quickTrials = Number.isFinite(msg.quickTrials) ? Math.max(0, msg.quickTrials|0) : 30;
           const trialDepth = Number.isFinite(msg.trialDepth) ? Math.max(0, msg.trialDepth|0) : 3;
+          const perWordTimeoutRaw = Number.isFinite(msg.wordTimeoutMs) ? msg.wordTimeoutMs : 0;
+          const perWordTimeoutMs = perWordTimeoutRaw > 0 ? Math.floor(perWordTimeoutRaw) : 0;
           const quickOpts = { propagateOnly: true, quickTrials, trialDepth };
           const cribPairs = Array.isArray(msg.cribPairs) ? msg.cribPairs : [];
           const cribMap = {};
@@ -2430,20 +2481,37 @@ try{
           const totalWords = wordlist.length;
           let wordsChecked = 0;
           let wordsSkipped = msg.preSkipped|0;
+          let wordsTimedOut = 0;
           const results = [];
           const progressTotal = Math.max(1, totalWords);
+          const getTime = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+            ? () => performance.now()
+            : () => Date.now();
           const progressMod = (function(len){
             if (len >= 1000) return 100;
             if (len >= 200) return 25;
             if (len >= 50) return 10;
             return 1;
           })(totalWords);
+          let lastProgressAt = getTime();
           const shouldReport = (idx) => {
-            if (progressMod === 1) return true;
-            if (idx === 0 || idx === wordlist.length - 1) return true;
-            return ((idx + 1) % progressMod) === 0;
+            let report = false;
+            if (progressMod === 1) report = true;
+            else if (idx === 0 || idx === wordlist.length - 1) report = true;
+            else if (((idx + 1) % progressMod) === 0) report = true;
+            if (!report){
+              const now = getTime();
+              if (now - lastProgressAt >= 750){
+                report = true;
+              }
+            }
+            if (report){
+              lastProgressAt = getTime();
+            }
+            return report;
           };
-          postMessage({ kind:'brute_progress', done:0, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+          postMessage({ kind:'brute_progress', done:0, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed:0, timedOut: wordsTimedOut });
+          lastProgressAt = getTime();
           const minKVal = Number.isFinite(minK) && minK > 0 ? minK : 1;
           const maxKVal = Number.isFinite(maxK) && maxK >= minKVal ? maxK : minKVal;
           const enforceNext = !!msg.bridgeNext;
@@ -2455,11 +2523,13 @@ try{
             if (!word || word.length !== selLen){
               wordsSkipped++;
               if (shouldReport(idx)){
-                postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+                const processed = idx + 1;
+                postMessage({ kind:'brute_progress', done: processed, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed, timedOut: wordsTimedOut });
               }
               continue;
             }
             wordsChecked++;
+            let wordTimedOut = false;
             if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
               const candidateCribMap = Object.assign({}, cribMap);
               let conflict = false;
@@ -2473,6 +2543,7 @@ try{
                 }
               }
               if (!conflict){
+                const wordDeadline = (op === 'autokey_custom_alpha' && perWordTimeoutMs > 0) ? (getTime() + perWordTimeoutMs) : null;
                 const plausible = [];
                 for (let kk=minKVal; kk<=maxKVal && !__cancelled; kk++){
                   try {
@@ -2486,34 +2557,64 @@ try{
                 }
                 if (!plausible.length){
                   if (shouldReport(idx)){
-                    postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+                    const processed = idx + 1;
+                    postMessage({ kind:'brute_progress', done: processed, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed, timedOut: wordsTimedOut });
                   }
                   continue;
                 }
                 for (const kk of plausible){
-                  if (__cancelled) break;
+                  if (__cancelled || wordTimedOut) break;
                   try {
-                    const sol = (op === 'vig_custom_alpha')
-                      ? solveVigUnknownAlphabet(letters, candidateCribMap, kk)
-                      : solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk);
-                    if (!sol || !sol.pos || !sol.k) continue;
-                    const fullDec = (op === 'vig_custom_alpha')
-                      ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
-                      : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
-                    if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
-                    const decLetters = sanitize(fullDec).split('');
-                    const fitness = englishFitness(decLetters);
-                    const inv = new Array(26);
-                    for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
-                    results.push({
-                      word,
-                      keyLength: kk,
-                      key: sol.k.map(x=>A[x]).join(''),
-                      alphabet: inv.join(''),
-                      decrypted: fullDec,
-                      fitness,
-                      op
-                    });
+                    if (op === 'vig_custom_alpha'){
+                      const sol = solveVigUnknownAlphabet(letters, candidateCribMap, kk);
+                      if (!sol || !sol.pos || !sol.k) continue;
+                      const fullDec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
+                      const decLetters = sanitize(fullDec).split('');
+                      const fitness = englishFitness(decLetters);
+                      const inv = new Array(26);
+                      for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
+                      results.push({
+                        word,
+                        keyLength: kk,
+                        key: sol.k.map(x=>A[x]).join(''),
+                        alphabet: inv.join(''),
+                        decrypted: fullDec,
+                        fitness,
+                        op: 'vig_custom_alpha'
+                      });
+                    } else {
+                      const solveOpts = {};
+                      if (perWordTimeoutMs > 0){
+                        const remaining = wordDeadline !== null ? (wordDeadline - getTime()) : perWordTimeoutMs;
+                        if (remaining <= 0){
+                          wordTimedOut = true;
+                          break;
+                        }
+                        solveOpts.maxMillis = Math.max(1, Math.floor(remaining));
+                      }
+                      const sol = solveAutokeyUnknownAlphabet(letters, candidateCribMap, kk, solveOpts);
+                      if (solveOpts && solveOpts.timedOut){
+                        wordTimedOut = true;
+                        break;
+                      }
+                      if (!sol || !sol.pos || !sol.k) continue;
+                      const fullDec = decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k);
+                      if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
+                      const decLetters = sanitize(fullDec).split('');
+                      const fitness = englishFitness(decLetters);
+                      const inv = new Array(26);
+                      for (let L=0; L<26; L++){ inv[sol.pos[L]] = A[L]; }
+                      results.push({
+                        word,
+                        keyLength: kk,
+                        key: sol.k.map(x=>A[x]).join(''),
+                        alphabet: inv.join(''),
+                        decrypted: fullDec,
+                        fitness,
+                        op: 'autokey_custom_alpha'
+                      });
+                    }
                   } catch(e){}
                 }
               }
@@ -2621,13 +2722,17 @@ try{
                 }
               }
             }
+            if (wordTimedOut){
+              wordsTimedOut++;
+            }
             if (shouldReport(idx)){
-              postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+              const processed = idx + 1;
+              postMessage({ kind:'brute_progress', done: processed, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed, timedOut: wordsTimedOut });
             }
           }
           results.sort((a,b)=> (isFinite(b.fitness)?b.fitness:-Infinity) - (isFinite(a.fitness)?a.fitness:-Infinity));
           const limited = (maxResults && maxResults > 0) ? results.slice(0, maxResults) : results.slice();
-          postMessage({ kind:'brute_done', results: limited, totalCandidates: results.length, wordsChecked, wordsSkipped, startPos, endPos, maxResults, cancelled: __cancelled, bridgeNext: enforceNext, nextSegmentLen });
+          postMessage({ kind:'brute_done', results: limited, totalCandidates: results.length, wordsChecked, wordsSkipped, startPos, endPos, maxResults, cancelled: __cancelled, bridgeNext: enforceNext, nextSegmentLen, wordsTimedOut });
         }
         onmessage = (ev)=>{
           const msg = ev.data||{};
@@ -2938,10 +3043,13 @@ try{
           const done = data.done|0;
           const checked = data.checked|0;
           const skipped = data.skipped|0;
-          const label = data.label || `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words`;
+          const timedOut = typeof data.timedOut === 'number' ? data.timedOut|0 : 0;
+          const processed = typeof data.processed === 'number' ? data.processed|0 : Math.max(done, checked + skipped);
+          const label = data.label || `Processed ${processed.toLocaleString()} / ${total.toLocaleString()} words`;
           updateProgress(done, label);
           if (BRUTE_SUMMARY){
-            let text = `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words (skipped ${skipped.toLocaleString()}).`;
+            const timeoutPart = timedOut > 0 ? `, timed out ${timedOut.toLocaleString()}` : '';
+            let text = `Processed ${processed.toLocaleString()} / ${total.toLocaleString()} words — checked ${checked.toLocaleString()} (skipped ${skipped.toLocaleString()}${timeoutPart}).`;
             if (bruteCtx && bruteCtx.bridgeNext){
               text += ' Enforcing next crib segment.';
             }
@@ -2972,7 +3080,7 @@ try{
             wordsSkipped,
             totalCandidates,
             data.maxResults,
-            { bridgeNext: !!data.bridgeNext, nextSegmentLen: typeof data.nextSegmentLen === 'number' ? data.nextSegmentLen : undefined }
+            { bridgeNext: !!data.bridgeNext, nextSegmentLen: typeof data.nextSegmentLen === 'number' ? data.nextSegmentLen : undefined, timedOutWords: typeof data.wordsTimedOut === 'number' ? data.wordsTimedOut|0 : 0 }
           );
           if (data.cancelled && BRUTE_SUMMARY){
             BRUTE_SUMMARY.textContent += ' (stopped early)';
