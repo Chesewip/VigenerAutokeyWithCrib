@@ -474,6 +474,42 @@ function buildLetterStreams(letters){
   return { cLetters, absToLetterStep };
 }
 
+function alphabetInfoFromPositions(pos){
+  const N = 26;
+  const posFull = Array.from({ length: N }, (_, idx) => {
+    const val = Array.isArray(pos) ? pos[idx] : null;
+    return (Number.isInteger(val) && val >= 0 && val < N) ? val : null;
+  });
+  const taken = new Array(N).fill(false);
+  for (let i = 0; i < N; i++){
+    const v = posFull[i];
+    if (v != null){
+      taken[v] = true;
+    }
+  }
+  let next = 0;
+  for (let i = 0; i < N; i++){
+    if (posFull[i] == null){
+      while (next < N && taken[next]) next++;
+      if (next < N){
+        posFull[i] = next;
+        taken[next] = true;
+      }
+    }
+  }
+  const inv = new Array(N);
+  for (let i = 0; i < N; i++){
+    const idx = posFull[i];
+    if (idx != null && idx >= 0 && idx < N){
+      inv[idx] = A[i];
+    }
+  }
+  for (let i = 0; i < N; i++){
+    if (!inv[i]) inv[i] = A[i];
+  }
+  return { posFull, inv, invString: inv.join('') };
+}
+
 // ===== Vigenère =====
 function solveCribVigenere(cipherSeg, plainSeg, keylen, letterStartPos){
   const tpl = Array(keylen).fill(null);
@@ -1705,20 +1741,6 @@ async function runUnknownAlphabetInline(){
     }
     return n;
   }
-  function buildAlphabetString(pos){
-    const N=26;
-    // fill like decryptWithCustomAlphabet does
-    const posFull = pos.slice();
-    const taken = new Array(N).fill(false);
-    for (let L=0; L<N; L++){ if (posFull[L]!=null){ taken[posFull[L]]=true; } }
-    let t=0; for (let L=0; L<N; L++){ if (posFull[L]==null){ while(t<N && taken[t]) t++; if (t<N){ posFull[L]=t; taken[t]=true; } } }
-    // inverse: index -> letter (in normal A..Z)
-    const inv = new Array(N);
-    for (let L=0; L<N; L++){ const idx = posFull[L]; if (idx!=null && idx>=0 && idx<N){ inv[idx] = A[L]; } }
-    for (let i=0;i<N;i++){ if (!inv[i]) inv[i] = A[i]; }
-    return { posFull, inv, invString: inv.join('') };
-  }
-
   const {letters, cribMap} = gatherCribs();
   const segments = collectContiguousCribs(letters, cribMap);
   const minK = parseInt(document.getElementById('minK').value);
@@ -1748,7 +1770,7 @@ async function runUnknownAlphabetInline(){
         ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
         : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k, autokeyAlgo);
       const fitness = englishFitness( sanitize(dec).split('') );
-      const alphaInfo = buildAlphabetString(sol.pos);
+      const alphaInfo = alphabetInfoFromPositions(sol.pos);
       const keyResidues = sol.k.map(x=>A[x]).join('');
       const actualKey = sol.k.map(v => alphaInfo.inv[v] || '?').join('');
       results.push({
@@ -1836,7 +1858,7 @@ try{
     results.sort((a,b)=>b.score - a.score);
     const best = results[0];
     if (best && best.posRaw && best.kRaw){
-      const alphaInfo = buildAlphabetString(best.posRaw);
+      const alphaInfo = alphabetInfoFromPositions(best.posRaw);
       const alphaStr = alphaInfo.invString;
       const fullText = isVigMode
         ? decryptWithCustomAlphabet(letters, best.posRaw, best.kRaw)
@@ -3190,7 +3212,7 @@ try{
           const target = OUT || document.createElement('div');
           const best = baseResults[0];
           if (best && best.posRaw && best.kRaw){
-            const alphaInfo = buildAlphabetString(best.posRaw);
+            const alphaInfo = alphabetInfoFromPositions(best.posRaw);
             const alphaStr = alphaInfo.invString;
             const block = document.createElement('pre');
             const variantLine = isAutokey ? `variant:    ${autokeyAlgoLabel(payload.autokeyAlgo)}\n` : '';
