@@ -2443,7 +2443,7 @@ try{
             if (idx === 0 || idx === wordlist.length - 1) return true;
             return ((idx + 1) % progressMod) === 0;
           };
-          postMessage({ kind:'brute_progress', done:0, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+          postMessage({ kind:'brute_progress', done:0, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed:0 });
           const minKVal = Number.isFinite(minK) && minK > 0 ? minK : 1;
           const maxKVal = Number.isFinite(maxK) && maxK >= minKVal ? maxK : minKVal;
           const enforceNext = !!msg.bridgeNext;
@@ -2455,7 +2455,8 @@ try{
             if (!word || word.length !== selLen){
               wordsSkipped++;
               if (shouldReport(idx)){
-                postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+                const processed = idx + 1;
+                postMessage({ kind:'brute_progress', done: processed, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed });
               }
               continue;
             }
@@ -2486,7 +2487,8 @@ try{
                 }
                 if (!plausible.length){
                   if (shouldReport(idx)){
-                    postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+                    const processed = idx + 1;
+                    postMessage({ kind:'brute_progress', done: processed, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed });
                   }
                   continue;
                 }
@@ -2622,7 +2624,8 @@ try{
               }
             }
             if (shouldReport(idx)){
-              postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+              const processed = idx + 1;
+              postMessage({ kind:'brute_progress', done: processed, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped, processed });
             }
           }
           results.sort((a,b)=> (isFinite(b.fitness)?b.fitness:-Infinity) - (isFinite(a.fitness)?a.fitness:-Infinity));
@@ -2938,10 +2941,11 @@ try{
           const done = data.done|0;
           const checked = data.checked|0;
           const skipped = data.skipped|0;
-          const label = data.label || `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words`;
+          const processed = typeof data.processed === 'number' ? data.processed|0 : Math.max(done, checked + skipped);
+          const label = data.label || `Processed ${processed.toLocaleString()} / ${total.toLocaleString()} words`;
           updateProgress(done, label);
           if (BRUTE_SUMMARY){
-            let text = `Checked ${checked.toLocaleString()} / ${total.toLocaleString()} words (skipped ${skipped.toLocaleString()}).`;
+            let text = `Processed ${processed.toLocaleString()} / ${total.toLocaleString()} words — checked ${checked.toLocaleString()} (skipped ${skipped.toLocaleString()}).`;
             if (bruteCtx && bruteCtx.bridgeNext){
               text += ' Enforcing next crib segment.';
             }
