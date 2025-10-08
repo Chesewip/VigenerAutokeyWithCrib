@@ -1,1 +1,15 @@
-placeholder
+# Cipher Crib Tester
+
+This project hosts a single-page tool for experimenting with Vigenère-family ciphers. Paste a ciphertext, pin plaintext cribs under specific columns, and either test your assignments directly or run a wordlist-driven brute force to explore candidate words.
+
+## Autokey + unknown alphabet brute-forcer performance
+
+The autokey + unknown alphabet mode relies on a constraint solver that tries to deduce both the mixed alphabet and the autokey seed from the crib placements. When the brute-forcer evaluates each candidate word, it first runs a cheap "quick trial" phase that only performs propagation and a handful of shallow randomized guesses (`quickTrials` × `trialDepth`). That phase rejects obviously inconsistent words quickly, so iterations with low coverage or conflicting cribs finish almost immediately.
+
+If a word survives the quick trial, the solver has to perform a full depth-first search over the remaining unknown letters and key positions while maintaining the bijective alphabet mapping. The amount of work this backtracking search needs varies wildly: dense crib coverage forces many deterministic deductions, but sparse coverage leaves large parts of the alphabet unassigned and therefore expands the search tree. Those cases can keep the worker busy for noticeably longer before it either finds a consistent solution or exhausts all possibilities.
+
+In short, the variability you see reflects how constrained the puzzle becomes after a particular candidate is inserted—tight constraints yield fast rejections or solutions, while loose constraints require the solver to explore far more combinations.
+
+## Optimizing the autokey brute-forcer
+
+See [`docs/autokey_optimizations.md`](docs/autokey_optimizations.md) for a deeper breakdown of why the solver occasionally performs a full search and several concrete optimization strategies that can reduce those worst-case stalls.

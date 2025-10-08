@@ -2484,7 +2484,12 @@ try{
                     }
                   } catch(e){}
                 }
-                if (!plausible.length) continue;
+                if (!plausible.length){
+                  if (shouldReport(idx)){
+                    postMessage({ kind:'brute_progress', done: idx+1, total: progressTotal, checked:wordsChecked, skipped:wordsSkipped });
+                  }
+                  continue;
+                }
                 for (const kk of plausible){
                   if (__cancelled) break;
                   try {
