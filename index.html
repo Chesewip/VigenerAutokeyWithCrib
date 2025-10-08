@@ -198,6 +198,10 @@ function autokeyAlgoLabel(algo){
   if (norm === 'beaufort_variant') return 'Variant Beaufort';
   return 'Vigenère-style';
 }
+function currentAutokeyAlgo(){
+  const sel = document.getElementById('autokeyAlgo');
+  return normalizeAutokeyAlgo(sel ? sel.value : 'vigenere');
+}
 function autokeyOpsFor(algo){
   const norm = normalizeAutokeyAlgo(algo);
   if (norm === 'beaufort'){
@@ -1874,10 +1878,6 @@ try{
     let uaWorker = null;
     let currentJob = null;
     let bruteCtx = null;
-
-    function currentAutokeyAlgo(){
-      return normalizeAutokeyAlgo(SEL_AUTOKEY_ALGO ? SEL_AUTOKEY_ALGO.value : 'vigenere');
-    }
 
     function updateAutokeyAlgoVisibility(){
       if (!SEL_AUTOKEY_ALGO) return;
