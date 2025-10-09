@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Puzzle Decrypter Playground</title>
+  <title>Solve the Secret</title>
   <style>
     :root{
       --bg:#020617;
@@ -360,15 +360,17 @@
 </head>
 <body>
   <header class="hero">
-    <h1>Autokey Puzzle Playground</h1>
-    <p>Crack a mysterious message by guessing the missing letters. Start by pasting your cipher text, sprinkle in the letters you feel confident about, and let the playground test how close you are to a real English solution.</p>
+    <h1>Solve the Secret</h1>
+    <p>Help crack a 10 year unsolved puzzle.</p>
   </header>
 
   <div class="panels">
     <section class="panel" id="setupPanel">
-      <h2>Step 1 · Drop in your cipher</h2>
-      <p class="muted">We keep all punctuation and spacing intact so everything lines up perfectly while you solve.</p>
-      <textarea id="ctext">Rc qipv jhx vld plson fhceuh itp jui gh qhzu dg sq xie dhw. U gbfl lf fluz pcag wrgkv zw, dinyg zw, qge gnvm L fhx.</textarea>
+      <h2>Step 1 · Meet the mystery</h2>
+      <p class="muted">We've loaded a puzzling cipher that keeps all punctuation and spacing intact so everything lines up perfectly while you solve.</p>
+      <div class="hidden-control">
+        <textarea id="ctext">Rc qipv jhx vld plson fhceuh itp jui gh qhzu dg sq xie dhw. U gbfl lf fluz pcag wrgkv zw, dinyg zw, qge gnvm L fhx.</textarea>
+      </div>
 
       <div class="hidden-control">
         <label class="small muted" for="minK">Key length range:</label>
