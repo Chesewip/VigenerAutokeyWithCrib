@@ -28,12 +28,15 @@
       color: var(--ink);
       padding: 32px 18px 54px;
       box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
     h1 { font-size: 28px; margin:0 0 8px; font-weight:800; letter-spacing:-0.01em }
     h2 { font-size: 18px; margin:0 0 12px; font-weight:700 }
     p { margin:0 }
     .hero {
-      max-width: 900px;
+      width: min(960px, 100%);
       margin: 0 auto 24px;
       text-align: center;
     }
@@ -43,7 +46,7 @@
       line-height: 1.5;
     }
     .panels {
-      max-width: 960px;
+      width: min(1280px, 100%);
       margin: 0 auto;
       display: flex;
       flex-direction: column;
@@ -178,6 +181,19 @@
     .muted { color:var(--muted); }
     .legend { display:none }
     .small { font-size:13px }
+    .summary-text {
+      font-size:16px;
+      line-height:1.6;
+      font-weight:600;
+      transition:color .2s ease, transform .2s ease;
+    }
+    .summary-text.no-result {
+      color:var(--accent);
+      font-size:20px;
+      font-weight:800;
+      letter-spacing:0.01em;
+      text-shadow:0 0 20px rgba(56,189,248,0.35);
+    }
     .heat-meter { margin-top:18px; }
     .heat-track {
       position:relative;
@@ -232,10 +248,30 @@
     #progressInner { height:100%; background:linear-gradient(90deg, var(--cold), var(--accent)); width:0%; transition:width .3s ease; }
     @media (max-width: 720px) {
       body { padding:24px 16px; }
+      .hero { width:100%; }
       .panel { padding:20px; }
       .grid { justify-content:center; }
       .cell { width:44px; }
       textarea { min-height:140px; }
+    }
+
+    @media (max-width: 480px) {
+      .controls { justify-content:center; }
+      .controls button { flex:1 1 100%; max-width:280px; }
+      textarea { min-height:160px; }
+    }
+
+    @media (min-width: 1100px) {
+      body { padding:48px 48px 72px; }
+      .hero { width:min(1040px, 100%); }
+      .panels {
+        display:grid;
+        grid-template-columns:repeat(12, minmax(0, 1fr));
+        gap:22px;
+      }
+      #setupPanel, #gridPanel { grid-column:span 6; }
+      #results { grid-column:span 12; }
+      .panel.hidden-control { grid-column:span 12; }
     }
   </style>
 </head>
@@ -286,7 +322,7 @@
 
     <section class="panel" id="results">
       <h2>Step 3 · See how hot your guess is</h2>
-      <div id="summary" class="small muted">No test run yet — add a few guesses to start!</div>
+      <div id="summary" class="summary-text muted">No test run yet — add a few guesses to start!</div>
       <div class="heat-meter">
         <div class="heat-track">
           <div id="heatFill" class="heat-fill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
@@ -349,6 +385,20 @@ const NO_RESULT_MESSAGES = [
   "Close, but the parchment stays secret. Shuffle your guesses and rerun the test.",
   "The heat meter stayed frosty. Give the puzzle a different sprinkle of clues."
 ];
+
+function setSummaryMessage(text, options){
+  const summary = document.getElementById('summary');
+  if (!summary) return;
+  summary.textContent = text;
+  const opts = options || {};
+  const isNoResult = !!opts.noResult;
+  summary.classList.toggle('no-result', isNoResult);
+  if (isNoResult){
+    summary.classList.remove('muted');
+  } else {
+    summary.classList.add('muted');
+  }
+}
 
 function getQuickTrials(){
   const el = document.getElementById('quickTrialsInput');
@@ -438,15 +488,28 @@ function scoreHeat(stats){
   }
   const chi = Math.max(0, stats.chi || 0);
   const ic = stats.ic || 0;
-  const chiComponent = clamp01(1 / (1 + chi / 55));
-  const iocTarget = 0.0667;
-  const iocSpread = 0.015;
-  const iocComponent = clamp01(Math.exp(-Math.abs(ic - iocTarget) / iocSpread));
-  const lengthConfidence = clamp01((stats.length || 0) / 120);
-  const base = (chiComponent * 0.55) + (iocComponent * 0.45);
-  const boosted = base * (0.45 + (0.55 * lengthConfidence));
-  const score = clamp01(boosted);
-  return { score, chi: chi, ic, length: stats.length };
+  const length = stats.length || 0;
+  const chiSweetSpot = 20;
+  const chiDecay = 45;
+  let chiComponent;
+  if (chi <= chiSweetSpot){
+    chiComponent = 1;
+  } else {
+    chiComponent = Math.exp(-(chi - chiSweetSpot) / chiDecay);
+  }
+  chiComponent = clamp01(chiComponent);
+  const iocTarget = 0.066;
+  const iocTolerance = 0.005;
+  const iocComponent = clamp01(Math.exp(-Math.pow(ic - iocTarget, 2) / (2 * iocTolerance * iocTolerance)));
+  const lengthConfidence = clamp01(length / 80);
+  let baseScore = (chiComponent * 0.6) + (iocComponent * 0.4);
+  if (chi <= chiSweetSpot && Math.abs(ic - iocTarget) <= iocTolerance){
+    baseScore = 1;
+  } else {
+    baseScore *= 0.55 + (0.45 * lengthConfidence);
+  }
+  const score = clamp01(baseScore);
+  return { score, chi, ic, length };
 }
 
 function updateHeatMeter(stats){
@@ -486,10 +549,7 @@ function updateHeatMeter(stats){
 
 function resetHeatMeter(){
   updateHeatMeter(null);
-  const summary = document.getElementById('summary');
-  if (summary){
-    summary.textContent = 'No test run yet — add a few guesses to start!';
-  }
+  setSummaryMessage('No test run yet — add a few guesses to start!');
 }
 
 const AUTOKEY_ALGOS = ['vigenere','beaufort','beaufort_variant'];
@@ -1049,15 +1109,13 @@ function testCribs(){
   const minK = parseInt(document.getElementById('minK').value);
   const maxK = parseInt(document.getElementById('maxK').value);
   const out = document.getElementById('out');
-  const summary = document.getElementById('summary');
-
   out.textContent = '';
   if ((op !== 'vig_sub' && op !== 'vig_sub_post') && segments.length === 0){
-    summary.textContent = 'No crib segments entered — enter letters under ciphertext characters.';
+    setSummaryMessage('No crib segments entered — enter letters under ciphertext characters.');
     return;
   }
 
-  summary.textContent = `Testing ${segments.length} crib segment(s) for key lengths ${minK}..${maxK} using ${op}`;
+  setSummaryMessage(`Testing ${segments.length} crib segment(s) for key lengths ${minK}..${maxK} using ${op}`);
 
   if (op === 'vigenere'){
     const {cLetters} = buildLetterStreams(letters);
@@ -2051,9 +2109,8 @@ async function runUnknownAlphabetInline(){
   const minK = parseInt(document.getElementById('minK').value);
   const maxK = parseInt(document.getElementById('maxK').value);
   const out = document.getElementById('out');
-  const summary = document.getElementById('summary');
   out.textContent='';
-  if (segments.length === 0){ summary.textContent='Enter at least one crib segment.'; return; }
+  if (segments.length === 0){ setSummaryMessage('Enter at least one crib segment.'); return; }
   const total = (maxK - minK + 1);
   const isVigMode = (op === 'vig_custom_alpha');
   const autokeyAlgo = currentAutokeyAlgo();
@@ -2125,11 +2182,11 @@ async function runUnknownAlphabetInline(){
         const contrad = false;
         debugLines.push(`m=${kLen}: constraints=${cons.length}, residuesHit=${cover}/${kLen}, contradictions=${contrad}`);
       }
-      summary.textContent = `No solution for key lengths ${minK}..${maxK} under this model.`;
+      setSummaryMessage(`No solution for key lengths ${minK}..${maxK} under this model.`, { noResult: true });
       const pre = document.createElement('pre'); pre.className='small muted'; pre.textContent = debugLines.join('\n');
       out.appendChild(pre);
     } else {
-      summary.textContent = `No solution for key lengths ${minK}..${maxK} under autokey + unknown alphabet (${autokeyLabel}).`;
+      setSummaryMessage(`No solution for key lengths ${minK}..${maxK} under autokey + unknown alphabet (${autokeyLabel}).`, { noResult: true });
       const pre = document.createElement('pre'); pre.className='small muted';
       const detailLines = [];
       for (const {m, coverage} of coveragePerM){
@@ -2182,9 +2239,11 @@ try{
   }
 }catch(e){ console.warn('Summary render failed', e); }
 
-  summary.textContent = isVigMode
-    ? `Found ${results.length} solution(s) for unknown alphabet Vigenère.`
-    : `Found ${results.length} solution(s) for autokey + unknown alphabet (${autokeyLabel}).`;
+  setSummaryMessage(
+    isVigMode
+      ? `Found ${results.length} solution(s) for unknown alphabet Vigenère.`
+      : `Found ${results.length} solution(s) for autokey + unknown alphabet (${autokeyLabel}).`
+  );
   results.slice(0,50).forEach((r,idx)=>{
     const div=document.createElement('div'); div.className='row';
     const keyDisplay = (!isVigMode && r.actualKey) ? r.actualKey : r.key;
@@ -3410,7 +3469,7 @@ try{
         if (typeof outText === 'string' && BRUTE_OUT) BRUTE_OUT.textContent = outText;
       } else {
         if (BTN_TEST) BTN_TEST.disabled = false;
-        if (typeof summaryText === 'string' && SUMMARY) SUMMARY.textContent = summaryText;
+        if (typeof summaryText === 'string' && SUMMARY) setSummaryMessage(summaryText);
         if (typeof outText === 'string' && OUT) OUT.textContent = outText;
       }
       updateHeatMeter(null);
@@ -3423,7 +3482,7 @@ try{
     function startWorkerSolve(){
       const payload = gatherForWorker();
       if (!payload.cribPairs.length){
-        if (SUMMARY) SUMMARY.textContent = 'Enter at least one crib segment first.';
+        if (SUMMARY) setSummaryMessage('Enter at least one crib segment first.');
         return;
       }
       const isAutokey = payload.op === 'autokey_custom_alpha';
@@ -3439,7 +3498,7 @@ try{
         BTN_STOP.disabled = false;
       }
       updateStopVisibility();
-      if (SUMMARY) SUMMARY.textContent = `Running ${modeLabel}…`;
+      if (SUMMARY) setSummaryMessage(`Running ${modeLabel}…`);
       if (OUT) OUT.textContent = '';
       if (CAND_CNT) CAND_CNT.textContent = '0';
       showProgress(1, 'Estimating search space…');
@@ -3504,7 +3563,7 @@ try{
           if (!baseResults.length){
             if (SUMMARY){
               const idx = Math.floor(Math.random() * NO_RESULT_MESSAGES.length);
-              SUMMARY.textContent = NO_RESULT_MESSAGES[idx] || 'No luck this time — give it another whirl!';
+              setSummaryMessage(NO_RESULT_MESSAGES[idx] || 'No luck this time — give it another whirl!', { noResult: true });
             }
             if (OUT) OUT.textContent = '';
             updateHeatMeter(null);
@@ -3513,7 +3572,7 @@ try{
           baseResults.sort((a,b)=> (b.score||0) - (a.score||0));
           const best = baseResults[0];
           if (!best){
-            if (SUMMARY) SUMMARY.textContent = 'We searched the range but did not land on a readable decrypt.';
+            if (SUMMARY) setSummaryMessage('We searched the range but did not land on a readable decrypt.', { noResult: true });
             if (OUT) OUT.textContent = '';
             updateHeatMeter(null);
             return;
@@ -3531,7 +3590,7 @@ try{
             else if (pct >= 40) mood = '✨ Warming up — a few tweaks might crack it.';
             else if (pct > 0) mood = '🧊 Still chilly. Try sprinkling in more crib letters.';
             else mood = 'Add a few more confident letters so the meter can take a proper reading.';
-            SUMMARY.textContent = `Key length ${best.keyLength}: ${mood} (${pct}% hot)`;
+            setSummaryMessage(`Key length ${best.keyLength}: ${mood} (${pct}% hot)`);
           }
         }
       };
