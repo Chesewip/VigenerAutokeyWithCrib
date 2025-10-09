@@ -3756,11 +3756,6 @@ try{
         if (SUMMARY) setSummaryMessage('Enter at least one crib segment first.');
         return;
       }
-      const isAutokey = payload.op === 'autokey_custom_alpha';
-      const modeLabel = isAutokey
-        ? `autokey (${autokeyAlgoLabel(payload.autokeyAlgo)}) + unknown alphabet`
-        : 'unknown alphabet Vigenère';
-
       currentJob = 'unknown';
       bruteCtx = null;
 
@@ -3769,110 +3764,189 @@ try{
         BTN_STOP.disabled = false;
       }
       updateStopVisibility();
-      if (SUMMARY) setSummaryMessage(`Running ${modeLabel}…`);
       if (OUT) OUT.textContent = '';
       if (CAND_CNT) CAND_CNT.textContent = '0';
-      showProgress(1);
+      updateHeatMeter(null);
       scheduleAutoStop();
 
-      if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
-      uaWorker = makeWorker();
-
-      const streamed = [];
+      const queue = AUTOKEY_ALGOS.slice();
+      let currentAlgo = null;
+      let streamed = [];
       let initializedTotal = false;
       let dynTotal = 0;
       let nodeSeen = 0;
 
-      uaWorker.onmessage = (ev) => {
-        const data = ev && ev.data ? ev.data : {};
-        if (data && typeof data.candidatesFound === 'number' && CAND_CNT){
-          CAND_CNT.textContent = String(data.candidatesFound);
+      const finishSuccess = (results, algo) => {
+        clearAutoStopTimer();
+        hideProgress();
+        if (BTN_STOP){
+          BTN_STOP.disabled = true;
         }
-        const kind = data.type || data.kind || data.event;
-        if (kind === 'progress' || kind === 'hint'){
-          if ('total' in data && 'done' in data){
-            const panel = ensureProgressPanel();
-            const totalNum = Math.max(1, data.total|0);
-            const currentTotal = parseInt(panel.dataset.total || '0');
-            if (!initializedTotal || currentTotal !== totalNum){
-              showProgress(totalNum);
-              initializedTotal = true;
-            }
-            updateProgress(data.done|0);
-            return;
+        if (BTN_TEST) BTN_TEST.disabled = false;
+        try { if (uaWorker) uaWorker.terminate(); } catch(e){}
+        uaWorker = null;
+        currentJob = null;
+        updateStopVisibility();
+
+        const baseResults = Array.isArray(results) ? results.slice() : [];
+        if (!baseResults.length){
+          if (SUMMARY){
+            const idx = Math.floor(Math.random() * NO_RESULT_MESSAGES.length);
+            setSummaryMessage(NO_RESULT_MESSAGES[idx] || 'No luck this time — give it another whirl!', { noResult: true });
           }
-          const dfs = data.p && data.p.kind === 'dfs' ? data.p : (kind === 'dfs' ? data : null);
-          if (dfs && typeof dfs.nodes === 'number'){
-            nodeSeen = dfs.nodes|0;
-            if (dynTotal < nodeSeen + 100) dynTotal = nodeSeen + 1000;
-            const panel = ensureProgressPanel();
-            const currentTotal = parseInt(panel.dataset.total || '0');
-            if (!initializedTotal || currentTotal !== dynTotal){
-              showProgress(dynTotal);
-              initializedTotal = true;
-            }
-            updateProgress(nodeSeen);
-            return;
-          }
-        }
-        if (kind === 'candidate'){
-          streamed.push(data);
+          if (OUT) OUT.textContent = '';
+          updateHeatMeter(null);
           return;
         }
-        if (kind === 'result' || kind === 'done'){
-          clearAutoStopTimer();
-          hideProgress();
-          if (BTN_STOP){
-            BTN_STOP.disabled = true;
-          }
-          if (BTN_TEST) BTN_TEST.disabled = false;
-          try { uaWorker.terminate(); } catch(e){}
-          uaWorker = null;
-          currentJob = null;
-          updateStopVisibility();
-
-          const baseResults = Array.isArray(data.results) && data.results.length ? data.results : streamed;
-          if (!baseResults.length){
-            if (SUMMARY){
-              const idx = Math.floor(Math.random() * NO_RESULT_MESSAGES.length);
-              setSummaryMessage(NO_RESULT_MESSAGES[idx] || 'No luck this time — give it another whirl!', { noResult: true });
-            }
-            if (OUT) OUT.textContent = '';
-            updateHeatMeter(null);
-            return;
-          }
-          baseResults.sort((a,b)=> (b.score||0) - (a.score||0));
-          const best = baseResults[0];
-          if (!best){
-            if (SUMMARY) setSummaryMessage('We searched the range but did not land on a readable decrypt.', { noResult: true });
-            if (OUT) OUT.textContent = '';
-            updateHeatMeter(null);
-            return;
-          }
-          if (OUT){
-            OUT.textContent = best.full || '';
-          }
-          const stats = computeEnglishStats(best.full || '');
-          const scored = updateHeatMeter(stats);
-          if (SUMMARY){
-            const pct = Math.round((scored.score || 0) * 100);
-            let mood;
-            if (pct >= 90) mood = '🔥 Blazing! That reads like a solved mystery.';
-            else if (pct >= 65) mood = '🌶️ Spicy! The plaintext is almost unlocked.';
-            else if (pct >= 40) mood = '✨ Warming up — a few tweaks might crack it.';
-            else if (pct > 0) mood = '🧊 Still chilly. Try sprinkling in more crib letters.';
-            else mood = 'Add a few more confident letters so the meter can take a proper reading.';
-            setSummaryMessage(`Key length ${best.keyLength}: ${mood} (${pct}% hot)`);
-          }
+        baseResults.sort((a,b)=> (b.score||0) - (a.score||0));
+        const best = baseResults[0];
+        if (!best){
+          if (SUMMARY) setSummaryMessage('We searched the range but did not land on a readable decrypt.', { noResult: true });
+          if (OUT) OUT.textContent = '';
+          updateHeatMeter(null);
+          return;
+        }
+        if (OUT){
+          OUT.textContent = best.full || '';
+        }
+        const stats = computeEnglishStats(best.full || '');
+        const scored = updateHeatMeter(stats);
+        if (SUMMARY){
+          const pct = Math.round((scored.score || 0) * 100);
+          let mood;
+          if (pct >= 90) mood = '🔥 Blazing! That reads like a solved mystery.';
+          else if (pct >= 65) mood = '🌶️ Spicy! The plaintext is almost unlocked.';
+          else if (pct >= 40) mood = '✨ Warming up — a few tweaks might crack it.';
+          else if (pct > 0) mood = '🧊 Still chilly. Try sprinkling in more crib letters.';
+          else mood = 'Add a few more confident letters so the meter can take a proper reading.';
+          const variantLabel = autokeyAlgoLabel(algo);
+          setSummaryMessage(`Key length ${best.keyLength} (${variantLabel}): ${mood} (${pct}% hot)`);
         }
       };
 
-      uaWorker.onerror = (e) => {
-        const msg = e && (e.message || e.toString()) || 'unknown error';
-        stopWorker('Worker error (stopped).', 'Worker error: ' + msg);
+      const finishFailure = () => {
+        clearAutoStopTimer();
+        hideProgress();
+        if (BTN_STOP){
+          BTN_STOP.disabled = true;
+        }
+        if (BTN_TEST) BTN_TEST.disabled = false;
+        try { if (uaWorker) uaWorker.terminate(); } catch(e){}
+        uaWorker = null;
+        currentJob = null;
+        updateStopVisibility();
+        if (SUMMARY){
+          const idx = Math.floor(Math.random() * NO_RESULT_MESSAGES.length);
+          setSummaryMessage(NO_RESULT_MESSAGES[idx] || 'No luck this time — give it another whirl!', { noResult: true });
+        }
+        if (OUT) OUT.textContent = '';
+        updateHeatMeter(null);
       };
 
-      uaWorker.postMessage({ cmd:'start', ...payload });
+      const launchNext = (nextAlgoIndex = 0) => {
+        if (currentJob !== 'unknown'){
+          return;
+        }
+        if (!queue.length){
+          finishFailure();
+          return;
+        }
+        currentAlgo = queue.shift();
+        streamed = [];
+        initializedTotal = false;
+        dynTotal = 0;
+        nodeSeen = 0;
+
+        if (CAND_CNT) CAND_CNT.textContent = '0';
+
+        const variantLabel = autokeyAlgoLabel(currentAlgo);
+        const message = nextAlgoIndex === 0
+          ? `Thinking through the ${variantLabel} autokey twist…`
+          : `No clear text yet — trying the ${variantLabel} autokey twist next…`;
+        if (SUMMARY) setSummaryMessage(message);
+
+        showProgress(1);
+        restartThinkingAnimation(`Thinking — ${variantLabel}`);
+
+        if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
+        uaWorker = makeWorker();
+
+        uaWorker.onmessage = (ev) => {
+          const data = ev && ev.data ? ev.data : {};
+          if (data && typeof data.candidatesFound === 'number' && CAND_CNT){
+            CAND_CNT.textContent = String(data.candidatesFound);
+          }
+          const kind = data.type || data.kind || data.event;
+          if (currentJob !== 'unknown'){
+            return;
+          }
+          if (kind === 'progress' || kind === 'hint'){
+            if ('total' in data && 'done' in data){
+              const panel = ensureProgressPanel();
+              const totalNum = Math.max(1, data.total|0);
+              const currentTotal = parseInt(panel.dataset.total || '0');
+              if (!initializedTotal || currentTotal !== totalNum){
+                showProgress(totalNum);
+                restartThinkingAnimation(`Thinking — ${variantLabel}`);
+                initializedTotal = true;
+              }
+              updateProgress(data.done|0);
+              return;
+            }
+            const dfs = data.p && data.p.kind === 'dfs' ? data.p : (kind === 'dfs' ? data : null);
+            if (dfs && typeof dfs.nodes === 'number'){
+              nodeSeen = dfs.nodes|0;
+              if (dynTotal < nodeSeen + 100) dynTotal = nodeSeen + 1000;
+              const panel = ensureProgressPanel();
+              const currentTotal = parseInt(panel.dataset.total || '0');
+              if (!initializedTotal || currentTotal !== dynTotal){
+                showProgress(dynTotal);
+                restartThinkingAnimation(`Thinking — ${variantLabel}`);
+                initializedTotal = true;
+              }
+              updateProgress(nodeSeen);
+              return;
+            }
+          }
+          if (kind === 'candidate'){
+            streamed.push(data);
+            return;
+          }
+          if (kind === 'result' || kind === 'done'){
+            hideProgress();
+            try { if (uaWorker) uaWorker.terminate(); } catch(e){}
+            uaWorker = null;
+
+            const baseResults = Array.isArray(data.results) && data.results.length ? data.results : streamed;
+            if (baseResults.length){
+              finishSuccess(baseResults, currentAlgo);
+              return;
+            }
+
+            if (!queue.length){
+              finishFailure();
+              return;
+            }
+
+            if (SUMMARY){
+              const peekLabel = autokeyAlgoLabel(queue[0]);
+              setSummaryMessage(`Still frosty — switching to the ${peekLabel} autokey flavor…`);
+            }
+
+            launchNext(nextAlgoIndex + 1);
+          }
+        };
+
+        uaWorker.onerror = (e) => {
+          const msg = e && (e.message || e.toString()) || 'unknown error';
+          stopWorker('Worker error (stopped).', 'Worker error: ' + msg);
+        };
+
+        const runPayload = { ...payload, autokeyAlgo: currentAlgo };
+        uaWorker.postMessage({ cmd:'start', ...runPayload });
+      };
+
+      launchNext(0);
     }
 
     function startBruteWorker(payload){
