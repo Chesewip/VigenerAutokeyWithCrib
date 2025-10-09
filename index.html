@@ -46,7 +46,7 @@
       line-height: 1.5;
     }
     .panels {
-      width: min(1280px, 100%);
+      width: min(1400px, 100%);
       margin: 0 auto;
       display: flex;
       flex-direction: column;
@@ -91,13 +91,30 @@
     }
     .grid {
       display:flex;
-      gap:8px;
+      gap:14px 12px;
       flex-wrap:wrap;
       margin-top:16px;
       padding:18px;
       border-radius:16px;
       background:linear-gradient(145deg, rgba(56,189,248,0.08), rgba(15,118,110,0.08));
       border:1px solid rgba(148,163,184,0.12);
+      align-items:flex-start;
+    }
+    .word {
+      display:flex;
+      flex-wrap:nowrap;
+      flex:0 0 auto;
+      gap:8px;
+    }
+    .word-gap {
+      flex:0 0 26px;
+      height:1px;
+      pointer-events:none;
+    }
+    .line-break {
+      flex-basis:100%;
+      height:0;
+      pointer-events:none;
     }
     .cell {
       width:38px;
@@ -263,15 +280,22 @@
 
     @media (min-width: 1100px) {
       body { padding:48px 48px 72px; }
-      .hero { width:min(1040px, 100%); }
+      .hero { width:min(1100px, 100%); }
       .panels {
         display:grid;
         grid-template-columns:repeat(12, minmax(0, 1fr));
         gap:22px;
+        grid-template-areas:
+          "setup setup setup setup results results results results results results results results"
+          "grid grid grid grid grid grid grid grid grid grid grid grid"
+          "wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist"
+          "brute brute brute brute brute brute brute brute brute brute brute brute";
       }
-      #setupPanel, #gridPanel { grid-column:span 6; }
-      #results { grid-column:span 12; }
-      .panel.hidden-control { grid-column:span 12; }
+      #setupPanel { grid-area: setup; }
+      #results { grid-area: results; }
+      #gridPanel { grid-area: grid; }
+      #wordlistPanel { grid-area: wordlist; }
+      #bruteResults { grid-area: brute; }
     }
   </style>
 </head>
@@ -663,10 +687,56 @@ function renderGrid(){
   const letters = raw.split('');
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
-  
+
   let letterIndex = 0;
-  
+  let wordWrap = null;
+
+  const flushWord = () => {
+    if (wordWrap && wordWrap.childNodes.length){
+      grid.appendChild(wordWrap);
+    }
+    wordWrap = null;
+  };
+
+  const focusStep = (start, direction) => {
+    let pointer = start + direction;
+    while (pointer >= 0 && pointer < letters.length){
+      const target = grid.querySelector(`input.cribin[data-pos="${pointer}"]`);
+      if (target && !target.disabled){
+        target.focus();
+        return target;
+      }
+      pointer += direction;
+    }
+    return null;
+  };
+
   letters.forEach((ch, idx) => {
+    if (ch === '\r'){
+      return;
+    }
+
+    if (ch === '\n'){
+      flushWord();
+      const breaker = document.createElement('div');
+      breaker.className = 'line-break';
+      grid.appendChild(breaker);
+      return;
+    }
+
+    if (ch === ' '){
+      flushWord();
+      const spacer = document.createElement('div');
+      spacer.className = 'word-gap';
+      grid.appendChild(spacer);
+      return;
+    }
+
+    if (!wordWrap){
+      wordWrap = document.createElement('div');
+      wordWrap.className = 'word';
+    }
+
     const cell = document.createElement('div');
     cell.className = 'cell';
     cell.dataset.absIdx = idx;
@@ -688,7 +758,7 @@ function renderGrid(){
     } else {
       cell.dataset.letterIdx = letterIndex;
       letterIndex++;
-      
+
       // Selection mode click handler
       cell.addEventListener('click', (e) => {
         if (selectionMode){
@@ -708,40 +778,34 @@ function renderGrid(){
           crib.focus();
         }
       });
-      
+
       crib.addEventListener('input', () => {
         crib.value = sanitize(crib.value);
         if (crib.value.length === 1){
-          let next = crib.parentElement.nextElementSibling;
-          while (next && (!next.querySelector('input.cribin') || next.querySelector('input.cribin').disabled)) next = next.nextElementSibling;
-          if (next) next.querySelector('input.cribin').focus();
+          focusStep(idx, 1);
         }
       });
       crib.addEventListener('keydown', (e) => {
         if ((e.key === 'Backspace' || e.key==='Delete') && !crib.value){
-          let prev = crib.parentElement.previousElementSibling;
-          while (prev && (!prev.querySelector('input.cribin') || prev.querySelector('input.cribin').disabled)) prev = prev.previousElementSibling;
-          if (prev) prev.querySelector('input.cribin').focus();
+          focusStep(idx, -1);
         } else if (e.key === 'ArrowRight'){
-          let next = crib.parentElement.nextElementSibling;
-          while (next && (!next.querySelector('input.cribin') || next.querySelector('input.cribin').disabled)) next = next.nextElementSibling;
-          if (next) next.querySelector('input.cribin').focus();
+          focusStep(idx, 1);
         } else if (e.key === 'ArrowLeft'){
-          let prev = crib.parentElement.previousElementSibling;
-          while (prev && (!prev.querySelector('input.cribin') || prev.querySelector('input.cribin').disabled)) prev = prev.previousElementSibling;
-          if (prev) prev.querySelector('input.cribin').focus();
+          focusStep(idx, -1);
         }
       });
     }
 
     cell.appendChild(cspan);
     cell.appendChild(crib);
-    grid.appendChild(cell);
+    wordWrap.appendChild(cell);
   });
+
+  flushWord();
+
   const first = grid.querySelector('input.cribin:not([disabled])');
   if (first) first.focus();
 }
-
 // ===== Data extraction =====
 function gatherCribs(){
   const raw = document.getElementById('ctext').value;
