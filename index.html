@@ -916,6 +916,8 @@ function bruteForceWordlist(){
   const minK = parseInt(document.getElementById('minK').value, 10);
   const maxK = parseInt(document.getElementById('maxK').value, 10);
   const op = document.getElementById('op').value;
+  const selectedAutokeyAlgo = op === 'autokey_custom_alpha' ? currentAutokeyAlgo() : null;
+  const selectedVigAlgo = op === 'vig_custom_alpha' ? currentVigAlgo() : null;
   const quickTrials = getQuickTrials();
   const trialDepth = getTrialDepth();
 
@@ -923,7 +925,7 @@ function bruteForceWordlist(){
   const wrongLengthSkipped = wordlist.length - filtered.length;
 
   if (filtered.length === 0){
-    displayBruteResults([], startPos, endPos, 0, wrongLengthSkipped, 0, maxResults, { bridgeNext, nextSegmentLen, timedOutWords: 0, autokeyAlgo: selectedAutokeyAlgo });
+    displayBruteResults([], startPos, endPos, 0, wrongLengthSkipped, 0, maxResults, { bridgeNext, nextSegmentLen, timedOutWords: 0, autokeyAlgo: selectedAutokeyAlgo, vigAlgo: selectedVigAlgo });
     return;
   }
 
@@ -945,7 +947,8 @@ function bruteForceWordlist(){
     minK,
     maxK,
     op,
-    autokeyAlgo: currentAutokeyAlgo(),
+    autokeyAlgo: selectedAutokeyAlgo,
+    vigAlgo: selectedVigAlgo,
     maxResults,
     quickTrials,
     trialDepth,
@@ -967,6 +970,7 @@ function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipp
   const nextSegmentLen = (typeof opts.nextSegmentLen === 'number') ? opts.nextSegmentLen : undefined;
   const timedOutWords = (typeof opts.timedOutWords === 'number') ? opts.timedOutWords : 0;
   const variantLabel = opts.autokeyAlgo ? variantAlgoLabel(opts.autokeyAlgo) : null;
+  const vigVariantLabel = opts.vigAlgo ? variantAlgoLabel(opts.vigAlgo) : null;
   const panel = document.getElementById('bruteResults');
   const summary = document.getElementById('bruteSummary');
   const out = document.getElementById('bruteOut');
@@ -979,6 +983,8 @@ function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipp
   let text = `Found ${total} consistent cribs at positions ${startPos}-${endPos}. Showing top ${shown} (limit ${limit}). Checked ${wordsChecked} words (skipped ${wordsSkipped} wrong-length words${timeoutText}). Sorted by decryption quality.`;
   if (variantLabel){
     text += ` Autokey variant: ${variantLabel}.`;
+  } else if (vigVariantLabel){
+    text += ` Variant: ${vigVariantLabel}.`;
   }
   if (bridgeNext){
     if (nextSegmentLen === undefined){
@@ -997,7 +1003,11 @@ function displayBruteResults(results, startPos, endPos, wordsChecked, wordsSkipp
     div.className = idx < 5 ? 'result-item top' : 'result-item';
 
     const wordSpan = document.createElement('div');
-    const variantInfo = r.autokeyAlgo ? ` | <strong>Variant:</strong> ${variantAlgoLabel(r.autokeyAlgo)}` : '';
+    const variantInfo = r.autokeyAlgo
+      ? ` | <strong>Variant:</strong> ${variantAlgoLabel(r.autokeyAlgo)}`
+      : ((r.vigAlgo || opts.vigAlgo)
+        ? ` | <strong>Variant:</strong> ${variantAlgoLabel(r.vigAlgo || opts.vigAlgo)}`
+        : '');
     const keyDisplay = r.actualKey || r.key;
     const residuesInfo = (r.actualKey && r.actualKey !== r.key) ? ` <span class="muted small">(residues ${r.key})</span>` : '';
     wordSpan.innerHTML = `<strong>Word:</strong> ${r.word} | <strong>Key Length:</strong> ${r.keyLength} | <strong>Key:</strong> ${keyDisplay}${variantInfo} | <span class="score">Score: ${r.fitness.toFixed(2)}</span>${residuesInfo}`;
@@ -1653,16 +1663,25 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options, algo){
 }
 
 
-function decryptWithCustomAlphabet(letters, pos, k){
+function decryptWithCustomAlphabet(letters, pos, k, algo){
   const N=26;
   const inv=new Array(N); for (let L=0;L<N;L++) inv[pos[L]] = A[L];
+  const mod = (x)=>((x%N)+N)%N;
+  const algorithm = normalizeVariantAlgo(algo);
+  const ops = variantOpsFor(algorithm);
+  const plainFromCipherKey = (c, keyVal) => mod(ops.plainFromCipherKey(c, keyVal));
   let out=''; let step=0;
   for (let i=0;i<letters.length;i++){
     const ch=letters[i];
     if (!isLetter(ch)){ out+=ch; continue; }
-    const cIdx = pos[A2I[ch.toUpperCase()]];
-    const pIdx = ((cIdx - k[step % k.length]) % N + N) % N;
-    out += inv[pIdx];
+    const idx = A2I[ch.toUpperCase()];
+    let cIdx = pos[idx];
+    if (cIdx == null) cIdx = idx;
+    const keyValRaw = k[step % k.length];
+    const keyVal = mod(keyValRaw == null ? 0 : keyValRaw);
+    const pIdx = plainFromCipherKey(cIdx, keyVal);
+    const plainCh = inv[pIdx] || A[pIdx];
+    out += plainCh;
     step++;
   }
   return out;
@@ -1783,7 +1802,7 @@ async function runUnknownAlphabetInline(){
       : solveAutokeyUnknownAlphabet(letters, cribMap, kLen, undefined, autokeyAlgo);
     if (sol){
       const dec = isVigMode
-        ? decryptWithCustomAlphabet(letters, sol.pos, sol.k)
+        ? decryptWithCustomAlphabet(letters, sol.pos, sol.k, vigAlgo)
         : decryptAutokeyUnknownAlphabet(letters, sol.pos, sol.k, autokeyAlgo);
       const fitness = englishFitness( sanitize(dec).split('') );
       const alphaInfo = alphabetInfoFromPositions(sol.pos);
@@ -1879,7 +1898,7 @@ try{
       const alphaInfo = alphabetInfoFromPositions(best.posRaw);
       const alphaStr = alphaInfo.invString;
       const fullText = isVigMode
-        ? decryptWithCustomAlphabet(letters, best.posRaw, best.kRaw)
+        ? decryptWithCustomAlphabet(letters, best.posRaw, best.kRaw, best.vigAlgo || vigAlgo)
         : decryptAutokeyUnknownAlphabet(letters, best.posRaw, best.kRaw, autokeyAlgo);
       const displayKey = isVigMode ? best.key : best.kRaw.map(v => alphaInfo.inv[v] || '?').join('');
       const residuesLine = (!isVigMode && best.key) ? `key residues: ${best.key}\n` : '';
@@ -2222,15 +2241,25 @@ try{
           }
           return dfs();
         }
-        function decryptWithCustomAlphabet(letters, pos, k){
-          const inv = new Array(26); for (let L=0; L<26; L++) inv[pos[L]] = String.fromCharCode(65+L);
+        function decryptWithCustomAlphabet(letters, pos, k, algo){
+          const N = 26;
+          const inv = new Array(N); for (let L=0; L<N; L++) inv[pos[L]] = String.fromCharCode(65+L);
+          const mod = (x)=>((x%N)+N)%N;
+          const algorithm = normalizeVariantAlgo(algo);
+          const ops = variantOpsFor(algorithm);
+          const plainFromCipherKey = (c, keyVal) => mod(ops.plainFromCipherKey(c, keyVal));
           let out=''; let step=0;
           for (let i=0;i<letters.length;i++){
             const ch=letters[i];
             if (!isLetter(ch)){ out+=ch; continue; }
-            const cIdx = pos[ch.toUpperCase().charCodeAt(0)-65];
-            const pIdx = ((cIdx - k[step % k.length]) % 26 + 26) % 26;
-            out += inv[pIdx];
+            const idx = ch.toUpperCase().charCodeAt(0) - 65;
+            let cIdx = pos[idx];
+            if (cIdx == null) cIdx = idx;
+            const keyValRaw = k[step % k.length];
+            const keyVal = mod(keyValRaw == null ? 0 : keyValRaw);
+            const pIdx = plainFromCipherKey(cIdx, keyVal);
+            const plainCh = inv[pIdx] || String.fromCharCode(65 + pIdx);
+            out += plainCh;
             step++;
           }
           return out;
@@ -2713,6 +2742,7 @@ try{
           const maxK = msg.maxK|0;
           const op = msg.op || 'vigenere';
           const autokeyAlgo = op === 'autokey_custom_alpha' ? normalizeVariantAlgo(msg.autokeyAlgo) : null;
+          const vigAlgo = normalizeVariantAlgo(msg.vigAlgo);
           const maxResults = msg.maxResults|0;
           const quickTrials = Number.isFinite(msg.quickTrials) ? Math.max(0, msg.quickTrials|0) : 30;
           const trialDepth = Number.isFinite(msg.trialDepth) ? Math.max(0, msg.trialDepth|0) : 3;
@@ -2806,7 +2836,7 @@ try{
                   if (wordTimedOut) break;
                   try {
                     if (op === 'vig_custom_alpha'){
-                      const quick = solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickOpts, currentVigAlgo());
+                      const quick = solveVigUnknownAlphabet(letters, candidateCribMap, kk, quickOpts, vigAlgo);
                       if (quick){
                         plausible.push(kk);
                       }
@@ -2846,9 +2876,9 @@ try{
                     }
                     try {
                       if (op === 'vig_custom_alpha'){
-                        const sol = solveVigUnknownAlphabet(letters, candidateCribMap, kk, undefined, currentVigAlgo());
+                        const sol = solveVigUnknownAlphabet(letters, candidateCribMap, kk, undefined, vigAlgo);
                         if (!sol || !sol.pos || !sol.k) continue;
-                        const fullDec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+                        const fullDec = decryptWithCustomAlphabet(letters, sol.pos, sol.k, vigAlgo);
                         if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(fullDec, nextSegment)) continue;
                         const decLetters = sanitize(fullDec).split('');
                         const fitness = englishFitness(decLetters);
@@ -2864,7 +2894,8 @@ try{
                           alphabet: alphaInfo.invString,
                           decrypted: fullDec,
                           fitness,
-                          op: 'vig_custom_alpha'
+                          op: 'vig_custom_alpha',
+                          vigAlgo
                         });
                       } else {
                         const solveOpts = {};
@@ -3021,7 +3052,7 @@ try{
           }
           results.sort((a,b)=> (isFinite(b.fitness)?b.fitness:-Infinity) - (isFinite(a.fitness)?a.fitness:-Infinity));
           const limited = (maxResults && maxResults > 0) ? results.slice(0, maxResults) : results.slice();
-          postMessage({ kind:'brute_done', results: limited, totalCandidates: results.length, wordsChecked, wordsSkipped, startPos, endPos, maxResults, cancelled: __cancelled, bridgeNext: enforceNext, nextSegmentLen, wordsTimedOut, autokeyAlgo });
+          postMessage({ kind:'brute_done', results: limited, totalCandidates: results.length, wordsChecked, wordsSkipped, startPos, endPos, maxResults, cancelled: __cancelled, bridgeNext: enforceNext, nextSegmentLen, wordsTimedOut, autokeyAlgo, vigAlgo });
         }
         onmessage = (ev)=>{
           const msg = ev.data||{};
@@ -3074,7 +3105,7 @@ try{
               } else {
                 const sol = solveVigUnknownAlphabet(letters, cribMap, m, (p)=>postMessage({kind:'hint', m, p}), vigAlgo);
                 if (sol){
-                  const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k);
+                  const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k, vigAlgo);
                   const fit = englishFitness(dec.toUpperCase().replace(/[^A-Z]/g,'').split(''));
                   __candsFound++;
                   const keyResidues = sol.k.map(v=>String.fromCharCode(65+v)).join('');
@@ -3329,7 +3360,8 @@ try{
         skippedPre,
         totalWords,
         bridgeNext: !!payload.bridgeNext,
-        autokeyAlgo: payload.op === 'autokey_custom_alpha' ? normalizeVariantAlgo(payload.autokeyAlgo) : null
+        autokeyAlgo: payload.op === 'autokey_custom_alpha' ? normalizeVariantAlgo(payload.autokeyAlgo) : null,
+        vigAlgo: payload.op === 'vig_custom_alpha' ? normalizeVariantAlgo(payload.vigAlgo) : null
       };
 
       if (BTN_BRUTE) BTN_BRUTE.disabled = true;
@@ -3347,6 +3379,9 @@ try{
         if (payload.op === 'autokey_custom_alpha'){
           const variantLabel = variantAlgoLabel(normalizeVariantAlgo(payload.autokeyAlgo));
           text += ` Autokey variant: ${variantLabel}.`;
+        } else if (payload.op === 'vig_custom_alpha'){
+          const variantLabel = variantAlgoLabel(normalizeVariantAlgo(payload.vigAlgo));
+          text += ` Variant: ${variantLabel}.`;
         }
         BRUTE_SUMMARY.textContent = text;
       }
@@ -3382,6 +3417,8 @@ try{
             }
             if (bruteCtx && bruteCtx.autokeyAlgo){
               text += ` Autokey variant: ${variantAlgoLabel(bruteCtx.autokeyAlgo)}.`;
+            } else if (bruteCtx && bruteCtx.vigAlgo){
+              text += ` Variant: ${variantAlgoLabel(bruteCtx.vigAlgo)}.`;
             }
             BRUTE_SUMMARY.textContent = text;
           }
@@ -3410,7 +3447,7 @@ try{
             wordsSkipped,
             totalCandidates,
             data.maxResults,
-            { bridgeNext: !!data.bridgeNext, nextSegmentLen: typeof data.nextSegmentLen === 'number' ? data.nextSegmentLen : undefined, timedOutWords: typeof data.wordsTimedOut === 'number' ? data.wordsTimedOut|0 : 0, autokeyAlgo: data.autokeyAlgo }
+            { bridgeNext: !!data.bridgeNext, nextSegmentLen: typeof data.nextSegmentLen === 'number' ? data.nextSegmentLen : undefined, timedOutWords: typeof data.wordsTimedOut === 'number' ? data.wordsTimedOut|0 : 0, autokeyAlgo: data.autokeyAlgo, vigAlgo: data.vigAlgo }
           );
           if (data.cancelled && BRUTE_SUMMARY){
             BRUTE_SUMMARY.textContent += ' (stopped early)';
