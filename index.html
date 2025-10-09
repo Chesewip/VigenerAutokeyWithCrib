@@ -19,12 +19,18 @@
       --cold:#38bdf8;
       font-family:'Nunito', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
     }
+    *, *::before, *::after { box-sizing:border-box; }
     .thinking-panel {
       display:flex;
       align-items:center;
       justify-content:center;
       text-align:center;
-      min-height:110px;
+      min-height:96px;
+      background:rgba(8,17,35,0.85);
+      border-radius:18px;
+      border:1px solid rgba(56,189,248,0.14);
+      box-shadow:inset 0 0 0 1px rgba(15,23,42,0.4);
+      padding:18px;
     }
     .thinking-text {
       font-size:22px;
@@ -39,7 +45,7 @@
       min-height: 100vh;
       background: radial-gradient(circle at top left, #172554 0%, #020617 55%, #01030f 100%);
       color: var(--ink);
-      padding: 32px 18px 54px;
+      padding: 32px 18px 280px;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
@@ -84,6 +90,31 @@
       opacity:.4;
       pointer-events:none;
     }
+    .floating-panel {
+      position:fixed;
+      left:50%;
+      transform:translateX(-50%);
+      bottom:calc(32px + env(safe-area-inset-bottom, 0px));
+      width:min(520px, calc(100% - 40px));
+      background:rgba(15,23,42,0.95);
+      border-radius:22px;
+      box-shadow:0 38px 80px rgba(2,6,23,0.75), 0 0 0 1px rgba(56,189,248,0.12);
+      padding:26px 28px 28px;
+      display:flex;
+      flex-direction:column;
+      gap:18px;
+      z-index:40;
+      backdrop-filter:blur(12px);
+    }
+    #results {
+      max-height:min(420px, 70vh);
+      overflow-y:auto;
+    }
+    #out {
+      max-height:220px;
+      overflow:auto;
+      margin-top:6px;
+    }
     textarea {
       width:100%;
       min-height:120px;
@@ -112,6 +143,7 @@
       background:linear-gradient(145deg, rgba(56,189,248,0.08), rgba(15,118,110,0.08));
       border:1px solid rgba(148,163,184,0.12);
       align-items:flex-start;
+      overflow-x:auto;
     }
     .word {
       display:flex;
@@ -265,7 +297,7 @@
       border:1px solid rgba(56,189,248,0.18);
     }
     .hidden-control { display:none !important; }
-    #progressPanel { display:none; }
+    #progressPanel { display:none; width:100%; }
     #progressLabel { font-weight:800; font-size:22px; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); text-shadow:0 0 26px rgba(56,189,248,0.35); }
 
     .confetti-container {
@@ -291,35 +323,42 @@
       100% { opacity:0; transform:translate3d(var(--confetti-x, 0px), 120vh, 0) rotate(360deg); }
     }
     @media (max-width: 720px) {
-      body { padding:24px 16px; }
+      body { padding:24px 16px 340px; }
       .hero { width:100%; }
       .panel { padding:20px; }
       .grid { justify-content:center; }
       .cell { width:44px; }
       textarea { min-height:140px; }
+      .floating-panel {
+        width:calc(100% - 24px);
+        bottom:calc(20px + env(safe-area-inset-bottom, 0px));
+        padding:22px 22px 24px;
+        border-radius:20px;
+      }
+      #results { max-height:65vh; }
     }
 
     @media (max-width: 480px) {
       .controls { justify-content:center; }
       .controls button { flex:1 1 100%; max-width:280px; }
       textarea { min-height:160px; }
+      .floating-panel { bottom:calc(18px + env(safe-area-inset-bottom, 0px)); }
     }
 
     @media (min-width: 1100px) {
-      body { padding:48px 48px 72px; }
+      body { padding:48px 48px 320px; }
       .hero { width:min(1100px, 100%); }
       .panels {
         display:grid;
         grid-template-columns:repeat(12, minmax(0, 1fr));
         gap:22px;
         grid-template-areas:
-          "setup setup setup setup results results results results results results results results"
+          "setup setup setup setup setup setup setup setup setup setup setup setup"
           "grid grid grid grid grid grid grid grid grid grid grid grid"
           "wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist wordlist"
           "brute brute brute brute brute brute brute brute brute brute brute brute";
       }
       #setupPanel { grid-area: setup; }
-      #results { grid-area: results; }
       #gridPanel { grid-area: grid; }
       #wordlistPanel { grid-area: wordlist; }
       #bruteResults { grid-area: brute; }
@@ -371,7 +410,7 @@
       <div id="grid" class="grid"></div>
     </section>
 
-    <section class="panel" id="results">
+    <section class="floating-panel" id="results">
       <h2>Step 3 · See how hot your guess is</h2>
       <div id="summary" class="summary-text muted">No test run yet — add a few guesses to start!</div>
       <div class="heat-meter">
@@ -1549,7 +1588,7 @@ function ensureProgressPanel(){
   const after = document.getElementById('out');
   panel = document.createElement('div');
   panel.id = 'progressPanel';
-  panel.className = 'panel thinking-panel';
+  panel.className = 'thinking-panel';
   const lab = document.createElement('div');
   lab.id = 'progressLabel';
   lab.className = 'thinking-text';
