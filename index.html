@@ -3,126 +3,330 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Cipher Crib Tester</title>
+  <title>Puzzle Decrypter Playground</title>
   <style>
-#progressBar{background:#60a5fa;height:100%;width:0%}
+#progressBar{background:#f97316;height:100%;width:0%;transition:width .3s ease}
 
-    :root{--bg:#0f1724;--panel:#0b1220;--muted:#9fb1c9;--ink:#e6eef8;--accent:#60a5fa;--input-bg:#f8fafc;--input-ink:#0f1724;--input-bd:#b6c2d9}
-    body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin: 18px; background:var(--bg); color:var(--ink) }
-    h1 { font-size: 18px; margin:0 0 8px }
-    h2 { font-size: 14px; margin:0 0 8px }
-    .panel { background:var(--panel); border:1px solid rgba(255,255,255,0.06); padding:12px; border-radius:8px; margin-bottom:12px }
-    textarea { width:100%; height:90px; font-family: monospace; font-size:14px; padding:8px; border-radius:6px; background:#071022; color:#dbeafe; border:1px solid rgba(255,255,255,0.08) }
-    .grid { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px }
-    .cell { width:34px; text-align:center; position:relative; display:flex; flex-direction:column; align-items:center; gap:4px }
+    :root{
+      --bg:#f3f4ff;
+      --panel:#ffffff;
+      --muted:#5b6780;
+      --ink:#131728;
+      --accent:#6366f1;
+      --accent-soft:rgba(99,102,241,0.15);
+      --input-bg:#f4f5ff;
+      --input-ink:#131728;
+      --input-bd:#d7dcf9;
+      --hot:#f97316;
+      --cold:#38bdf8;
+      font-family:'Nunito', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top left, #eef1ff, #f3f4ff 55%, #e8edff 100%);
+      color: var(--ink);
+      padding: 32px 18px 54px;
+      box-sizing: border-box;
+    }
+    h1 { font-size: 28px; margin:0 0 8px; font-weight:800; letter-spacing:-0.01em }
+    h2 { font-size: 18px; margin:0 0 12px; font-weight:700 }
+    p { margin:0 }
+    .hero {
+      max-width: 900px;
+      margin: 0 auto 24px;
+      text-align: center;
+    }
+    .hero p {
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.5;
+    }
+    .panels {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .panel {
+      background: var(--panel);
+      border-radius: 18px;
+      box-shadow: 0 20px 45px rgba(15,23,42,0.08);
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+    .panel::before{
+      content:"";
+      position:absolute;
+      inset:-120px -120px auto auto;
+      width:220px;height:220px;
+      background:var(--accent-soft);
+      border-radius:50%;
+      filter:blur(0px);
+      opacity:.4;
+      pointer-events:none;
+    }
+    textarea {
+      width:100%;
+      min-height:120px;
+      font-family: 'Fira Code', monospace;
+      font-size:15px;
+      padding:16px;
+      border-radius:14px;
+      background:var(--input-bg);
+      color:var(--input-ink);
+      border:2px solid transparent;
+      transition:border-color .2s ease, box-shadow .2s ease;
+      box-shadow:0 6px 18px rgba(99,102,241,0.08);
+    }
+    textarea:focus {
+      outline:none;
+      border-color:var(--accent);
+      box-shadow:0 12px 30px rgba(99,102,241,0.16);
+    }
+    .grid {
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      margin-top:16px;
+      padding:18px;
+      border-radius:16px;
+      background:linear-gradient(145deg, rgba(99,102,241,0.08), rgba(56,189,248,0.08));
+    }
+    .cell {
+      width:38px;
+      text-align:center;
+      position:relative;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:6px;
+    }
+    .char {
+      display:block;
+      padding:8px 0;
+      background:#ffffff;
+      border-radius:12px;
+      font-weight:700;
+      border:2px solid transparent;
+      width:100%;
+      box-sizing:border-box;
+      color:var(--accent);
+      box-shadow:0 6px 15px rgba(148,163,184,0.28);
+    }
     .cell.selecting { cursor:pointer }
-    .cell.selected .char { background:#1e3a5f; border:2px solid var(--accent); }
-    .char { display:block; padding:6px 4px; background:#081426; border-radius:6px; font-weight:700; border:2px solid transparent; width:100%; box-sizing:border-box }
-    input.cribin { width:100%; text-align:center; border-radius:6px; padding:8px 4px; background:var(--input-bg); color:var(--input-ink); border:1px solid var(--input-bd); font-weight:700; box-sizing:border-box; font-size:18px; min-height:36px }
-    input.cribin:focus { outline:2px solid var(--accent); outline-offset:0 }
-    input.cribin[disabled]{ opacity:.35; cursor:not-allowed }
-    .controls { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap }
-    select,input[type=number],input[type=file],button,.checkbox-row { padding:8px 10px; border-radius:6px; background:#052033; color:#dbeafe; border:1px solid rgba(255,255,255,0.08) }
-    .checkbox-row{ display:flex; gap:8px; align-items:center }
-    button { cursor:pointer }
-    button:hover { background:#063a5a }
-    button.active { background:#1e3a5f; border-color:var(--accent) }
-    pre { background:#071426; padding:10px; border-radius:6px; overflow:auto; white-space:pre-wrap }
-    .ok { color:#8ef8b0 }
-    .bad { color:#ff9b9b }
-    .muted { color:var(--muted) }
-    .legend { display:flex; gap:14px; margin-top:8px; flex-wrap:wrap }
-    .small { font-size:12px }
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
-    .result-item { background:#081426; padding:8px; margin:8px 0; border-radius:6px; border-left:3px solid var(--accent) }
-    .result-item.top { border-left-color:#8ef8b0 }
-    .score { color:var(--accent); font-weight:700 }
-    .selection-info { background:#081426; padding:8px; border-radius:6px; margin-top:8px; display:none }
-    .selection-info.active { display:block }
-    @media (max-width: 640px) {
-      .grid { gap:4px }
-      .cell { width:42px }
-      .char { font-size:16px; padding:6px 3px }
-      input.cribin { min-height:40px; font-size:20px; padding:10px 4px }
+    .cell.selected .char { border-color:var(--accent); }
+    input.cribin {
+      width:100%;
+      text-align:center;
+      border-radius:12px;
+      padding:10px 0;
+      background:#fff;
+      color:var(--input-ink);
+      border:2px solid rgba(99,102,241,0.25);
+      font-weight:800;
+      box-sizing:border-box;
+      font-size:20px;
+      min-height:44px;
+      transition:border-color .2s ease, box-shadow .2s ease;
+      box-shadow:0 6px 15px rgba(99,102,241,0.08);
+    }
+    input.cribin:focus { outline:none; border-color:var(--accent); box-shadow:0 12px 30px rgba(99,102,241,0.16); }
+    input.cribin[disabled]{ opacity:.35; cursor:not-allowed; background:rgba(255,255,255,0.7); box-shadow:none }
+    .controls {
+      display:flex;
+      gap:12px;
+      align-items:center;
+      margin-top:18px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .controls button {
+      padding:12px 22px;
+      border-radius:999px;
+      border:none;
+      font-weight:700;
+      cursor:pointer;
+      transition:transform .15s ease, box-shadow .2s ease;
+      background:var(--accent);
+      color:#fff;
+      box-shadow:0 14px 30px rgba(99,102,241,0.28);
+    }
+    .controls button.secondary {
+      background:rgba(99,102,241,0.1);
+      color:var(--accent);
+      box-shadow:none;
+    }
+    .controls button:hover { transform:translateY(-1px); box-shadow:0 18px 36px rgba(99,102,241,0.28); }
+    .controls button.secondary:hover { box-shadow:0 8px 20px rgba(99,102,241,0.2); }
+    button:disabled { opacity:.45; cursor:not-allowed; box-shadow:none; transform:none }
+    pre {
+      background:rgba(99,102,241,0.07);
+      padding:18px;
+      border-radius:16px;
+      overflow:auto;
+      white-space:pre-wrap;
+      font-size:16px;
+      line-height:1.6;
+      color:var(--ink);
+      box-shadow:inset 0 0 0 1px rgba(99,102,241,0.12);
+    }
+    .muted { color:var(--muted); }
+    .legend { display:none }
+    .small { font-size:13px }
+    .heat-meter { margin-top:18px; }
+    .heat-track {
+      position:relative;
+      height:20px;
+      background:linear-gradient(90deg,var(--cold),#38c0f8,#60a5fa,#a855f7,var(--hot));
+      border-radius:999px;
+      overflow:hidden;
+      box-shadow:0 6px 14px rgba(99,102,241,0.18);
+    }
+    .heat-fill {
+      position:absolute;
+      top:0;left:0;height:100%;
+      width:0%;
+      background:rgba(255,255,255,0.65);
+      mix-blend-mode:overlay;
+      transition:width .35s ease;
+    }
+    .heat-labels {
+      margin-top:6px;
+      display:flex;
+      justify-content:space-between;
+      font-weight:600;
+      color:var(--muted);
+    }
+    .stat-chips {
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:14px;
+    }
+    .chip {
+      background:rgba(99,102,241,0.12);
+      color:var(--accent);
+      padding:8px 14px;
+      border-radius:999px;
+      font-weight:700;
+      font-size:13px;
+    }
+    .hidden-control { display:none !important; }
+    #progressWrap {
+      display:none;
+      margin-top:14px;
+      background:rgba(99,102,241,0.1);
+      border-radius:999px;
+      height:18px;
+      overflow:hidden;
+    }
+    #progressLabel { margin-top:8px; font-weight:600; color:var(--muted); }
+    #progressInner { height:100%; background:linear-gradient(90deg, var(--cold), var(--accent)); width:0%; transition:width .3s ease; }
+    @media (max-width: 720px) {
+      body { padding:24px 16px; }
+      .panel { padding:20px; }
+      .grid { justify-content:center; }
+      .cell { width:44px; }
+      textarea { min-height:140px; }
     }
   </style>
 </head>
 <body>
-  <h1>Cipher Crib Tester — Vigenère / MAS+Vig</h1>
+  <header class="hero">
+    <h1>Autokey Puzzle Playground</h1>
+    <p>Crack a mysterious message by guessing the missing letters. Start by pasting your cipher text, sprinkle in the letters you feel confident about, and let the playground test how close you are to a real English solution.</p>
+  </header>
 
-  <div class="panel">
-    <div class="small muted">Paste your ciphertext (punctuation/spaces kept for alignment). Type tentative plaintext letters under <em>letter</em> positions only (non-letters are disabled).</div>
-    <textarea id="ctext">Rc qipv jhx vld plson fhceuh itp jui gh qhzu dg sq xie dhw. U gbfl lf fluz pcag wrgkv zw, dinyg zw, qge gnvm L fhx.</textarea>
-    <div class="row" style="margin-top:10px">
-      <label class="small muted">Key length range:</label>
-      <input id="minK" type="number" min="1" value="1" style="width:72px" />
-      <input id="maxK" type="number" min="1" value="12" style="width:72px" />
-      <label class="small muted">Operation:</label>
-      <select id="op">
-        <option value="vigenere">Vigenère (C = P + K mod26)</option>
-        <option value="vig_sub">Vigenère + unknown substitution (pre‑sub on plaintext)</option>
-        <option value="vig_sub_post">Vigenère + unknown substitution (post‑sub on ciphertext)</option>
-        <option value="vig_custom_alpha">Vigenère with unknown alphabet (shared custom order)</option>
-        <option value="autokey_custom_alpha">Autokey with unknown alphabet (shared custom order)</option>
-      </select>
-      <label id="autokeyAlgoLabel" class="small muted" style="display:none">Autokey variant:</label>
-      <select id="autokeyAlgo" style="display:none">
-        <option value="vigenere">Vigenère-style (C = P + K)</option>
-        <option value="beaufort">Beaufort (C = K − P)</option>
-        <option value="beaufort_variant">Variant Beaufort (C = P − K)</option>
-      </select>
-      <button id="render">Render grid</button>
-      <button id="test">Test cribs</button>
-      <button id="stopSearch" style="display:none">Stop search</button>
-    </div>
-  </div>
+  <div class="panels">
+    <section class="panel" id="setupPanel">
+      <h2>Step 1 · Drop in your cipher</h2>
+      <p class="muted">We keep all punctuation and spacing intact so everything lines up perfectly while you solve.</p>
+      <textarea id="ctext">Rc qipv jhx vld plson fhceuh itp jui gh qhzu dg sq xie dhw. U gbfl lf fluz pcag wrgkv zw, dinyg zw, qge gnvm L fhx.</textarea>
 
-  <div class="panel" id="gridPanel">
-    <div id="grid" class="grid"></div>
-    <div class="legend small">
-      <div><span class="ok">●</span> consistent (no contradiction)</div>
-      <div><span class="bad">●</span> contradiction</div>
-      <div class="muted">Tip: try single-letter cribs (A/I for U/L), repeated pairs (e.g., "zw"), or whole words aligned to punctuation.</div>
-    </div>
-  </div>
+      <div class="hidden-control">
+        <label class="small muted" for="minK">Key length range:</label>
+        <input id="minK" type="number" min="1" value="4" />
+        <input id="maxK" type="number" min="1" value="20" />
+        <label class="small muted" for="op">Operation:</label>
+        <select id="op">
+          <option value="vigenere">Vigenère (C = P + K mod26)</option>
+          <option value="vig_sub">Vigenère + unknown substitution (pre‑sub on plaintext)</option>
+          <option value="vig_sub_post">Vigenère + unknown substitution (post‑sub on ciphertext)</option>
+          <option value="vig_custom_alpha">Vigenère with unknown alphabet (shared custom order)</option>
+          <option value="autokey_custom_alpha" selected>Autokey with unknown alphabet (shared custom order)</option>
+        </select>
+        <label id="autokeyAlgoLabel" class="small muted" for="autokeyAlgo">Autokey variant:</label>
+        <select id="autokeyAlgo">
+          <option value="vigenere">Vigenère-style (C = P + K)</option>
+          <option value="beaufort">Beaufort (C = K − P)</option>
+          <option value="beaufort_variant">Variant Beaufort (C = P − K)</option>
+        </select>
+      </div>
 
-  <div class="panel">
-    <h2>Wordlist Brute Force</h2>
-    <div class="small muted">Upload a wordlist and try all words at a selected position to find the best crib candidates.</div>
-    <div class="row" style="margin-top:10px">
-      <input type="file" id="wordlistFile" accept=".txt" />
-      <button id="selectMode">Select Word Position</button>
-      <label class="small muted">Max results:</label>
-      <input id="maxResults" type="number" min="1" value="20" style="width:72px" />
-            <label class="small muted">Quick trials:</label>
-      <input id="quickTrialsInput" type="number" min="0" value="30" style="width:72px" />
-      <label class="small muted">Trial depth:</label>
-      <input id="trialDepthInput" type="number" min="0" value="3" style="width:72px" />
-      <label class="small muted">Word timeout (ms):</label>
-      <input id="wordTimeoutInput" type="number" min="0" value="1500" style="width:90px" />
-      <label class="checkbox-row small" style="padding:0 6px 0 0">
-        <input type="checkbox" id="bruteBridgeNext" /> Enforce next crib
-      </label>
-      <button id="bruteForce">Brute force cribs</button>
-    </div>
-    <div id="wordlistStatus" class="small muted" style="margin-top:8px">No wordlist loaded</div>
-    <div id="selectionInfo" class="selection-info small">
-      <strong>Selection:</strong> <span id="selectionText">None</span> | 
-      <strong>Position:</strong> <span id="selectionPos">-</span> | 
-      <strong>Length:</strong> <span id="selectionLen">-</span>
-    </div>
-  </div>
+      <div class="controls">
+        <button id="render" class="secondary">Refresh Puzzle</button>
+        <button id="stopSearch" class="secondary" disabled>Stop Search</button>
+        <button id="test">Test My Guess</button>
+      </div>
+    </section>
 
-  <div class="panel" id="results">
-    <h2>Results</h2>
-    <div id="summary" class="small muted">No test run yet</div>
-    <pre id="out"></pre>
-  </div>
+    <section class="panel" id="gridPanel">
+      <h2>Step 2 · Fill in what you know</h2>
+      <p class="muted">Click under each letter and type your guess. We'll only let you edit the spots that are real letters.</p>
+      <div id="grid" class="grid"></div>
+    </section>
 
-  <div class="panel" id="bruteResults" style="display:none">
-    <h2>Brute Force Results</h2>
-    <div id="bruteSummary" class="small muted"></div>
-    <div id="bruteOut"></div>
+    <section class="panel" id="results">
+      <h2>Step 3 · See how hot your guess is</h2>
+      <div id="summary" class="small muted">No test run yet — add a few guesses to start!</div>
+      <div class="heat-meter">
+        <div class="heat-track">
+          <div id="heatFill" class="heat-fill"></div>
+        </div>
+        <div class="heat-labels"><span>Cold</span><span>Hot!</span></div>
+      </div>
+      <div class="stat-chips">
+        <div class="chip" id="chiStat">χ²: —</div>
+        <div class="chip" id="iocStat">IOC: —</div>
+      </div>
+      <pre id="out"></pre>
+    </section>
+
+    <section class="panel hidden-control" id="wordlistPanel">
+      <h2>Wordlist Brute Force</h2>
+      <div class="small muted">Upload a wordlist and try all words at a selected position to find the best crib candidates.</div>
+      <div class="row" style="margin-top:10px">
+        <input type="file" id="wordlistFile" accept=".txt" />
+        <button id="selectMode">Select Word Position</button>
+        <label class="small muted">Max results:</label>
+        <input id="maxResults" type="number" min="1" value="20" style="width:72px" />
+              <label class="small muted">Quick trials:</label>
+        <input id="quickTrialsInput" type="number" min="0" value="30" style="width:72px" />
+        <label class="small muted">Trial depth:</label>
+        <input id="trialDepthInput" type="number" min="0" value="3" style="width:72px" />
+        <label class="small muted">Word timeout (ms):</label>
+        <input id="wordTimeoutInput" type="number" min="0" value="1500" style="width:90px" />
+        <label class="checkbox-row small" style="padding:0 6px 0 0">
+          <input type="checkbox" id="bruteBridgeNext" /> Enforce next crib
+        </label>
+        <button id="bruteForce">Brute force cribs</button>
+      </div>
+      <div id="wordlistStatus" class="small muted" style="margin-top:8px">No wordlist loaded</div>
+      <div id="selectionInfo" class="selection-info small">
+        <strong>Selection:</strong> <span id="selectionText">None</span> |
+        <strong>Position:</strong> <span id="selectionPos">-</span> |
+        <strong>Length:</strong> <span id="selectionLen">-</span>
+      </div>
+    </section>
+
+    <section class="panel hidden-control" id="bruteResults" style="display:none">
+      <h2>Brute Force Results</h2>
+      <div id="bruteSummary" class="small muted"></div>
+      <div id="bruteOut"></div>
+    </section>
   </div>
 
 <script>
@@ -185,6 +389,79 @@ function englishFitness(upArr){
   const subs = wordHits(s);
   const raw = chi + 4*subs;
   return (raw / n) * 100;
+}
+
+function computeEnglishStats(text){
+  const clean = sanitize(text || '');
+  const counts = {};
+  for (const ch of clean){ counts[ch] = (counts[ch] || 0) + 1; }
+  const n = clean.length;
+  let chi = 0;
+  let ic = 0;
+  if (n > 1){
+    for (const ch of A){
+      const obs = counts[ch] || 0;
+      const exp = FREQ[ch] * n / 100;
+      if (exp > 0){
+        const diff = obs - exp;
+        chi += (diff * diff) / exp;
+      }
+      ic += obs * (obs - 1);
+    }
+    ic /= (n * (n - 1));
+  } else if (n === 1){
+    ic = 0;
+  }
+  return { chi, ic, length: n, clean };
+}
+
+function scoreHeat(stats){
+  if (!stats || !stats.length){
+    return { score: 0, chi: stats ? stats.chi : 0, ic: stats ? stats.ic : 0, length: stats ? stats.length : 0 };
+  }
+  const CHI_TARGET = 33;
+  const CHI_SPREAD = 60;
+  const IOC_TARGET = 0.0667;
+  const IOC_SPREAD = 0.02;
+  const chiDelta = Math.abs((stats.chi || 0) - CHI_TARGET);
+  const chiScore = Math.max(0, 1 - (chiDelta / CHI_SPREAD));
+  const iocDelta = Math.abs((stats.ic || 0) - IOC_TARGET);
+  const iocScore = Math.max(0, 1 - (iocDelta / IOC_SPREAD));
+  const score = Math.max(0, Math.min(1, (chiScore * 0.6) + (iocScore * 0.4)));
+  return { score, chi: stats.chi, ic: stats.ic, length: stats.length };
+}
+
+function updateHeatMeter(stats){
+  const heatFill = document.getElementById('heatFill');
+  const chiStat = document.getElementById('chiStat');
+  const iocStat = document.getElementById('iocStat');
+  if (!heatFill || !chiStat || !iocStat){
+    return { score: 0, chi: 0, ic: 0 };
+  }
+  if (!stats || !stats.length){
+    heatFill.style.width = '0%';
+    heatFill.style.opacity = '0.35';
+    chiStat.textContent = 'χ²: —';
+    iocStat.textContent = 'IOC: —';
+    return { score: 0, chi: 0, ic: 0 };
+  }
+  const scored = scoreHeat(stats);
+  const pct = Math.round(scored.score * 100);
+  heatFill.style.width = `${pct}%`;
+  heatFill.style.opacity = '1';
+  const chiVal = scored.chi.toFixed(2);
+  const iocVal = scored.ic.toFixed(4);
+  chiStat.textContent = `χ²: ${chiVal}`;
+  iocStat.textContent = `IOC: ${iocVal}`;
+  return scored;
+}
+
+function resetHeatMeter(){
+  updateHeatMeter(null);
+  const summary = document.getElementById('summary');
+  if (summary){
+    summary.textContent = 'No test run yet — add a few guesses to start!';
+  }
 }
 
 const AUTOKEY_ALGOS = ['vigenere','beaufort','beaufort_variant'];
@@ -1915,6 +2192,29 @@ try{
     const BRUTE_SUMMARY = $("bruteSummary");
     const BRUTE_OUT = $("bruteOut");
 
+    const DEFAULT_MIN_K = 4;
+    const DEFAULT_MAX_K = 20;
+
+    if (SEL_OP){
+      SEL_OP.value = 'autokey_custom_alpha';
+      SEL_OP.disabled = true;
+    }
+    const MIN_K_INPUT = $("minK");
+    const MAX_K_INPUT = $("maxK");
+    if (MIN_K_INPUT){
+      MIN_K_INPUT.value = DEFAULT_MIN_K;
+      MIN_K_INPUT.disabled = true;
+    }
+    if (MAX_K_INPUT){
+      MAX_K_INPUT.value = DEFAULT_MAX_K;
+      MAX_K_INPUT.disabled = true;
+    }
+    if (SEL_AUTOKEY_ALGO){
+      SEL_AUTOKEY_ALGO.value = normalizeAutokeyAlgo(SEL_AUTOKEY_ALGO.value);
+    }
+    updateAutokeyAlgoVisibility();
+    resetHeatMeter();
+
     let uaWorker = null;
     let currentJob = null;
     let bruteCtx = null;
@@ -1943,8 +2243,10 @@ try{
         if (!letter) return;
         cribPairs.push([pos, letter]);
       });
-      const minK = $("minK") ? parseInt($("minK").value) : 2;
-      const maxK = $("maxK") ? parseInt($("maxK").value) : 20;
+      if (MIN_K_INPUT) MIN_K_INPUT.value = DEFAULT_MIN_K;
+      if (MAX_K_INPUT) MAX_K_INPUT.value = DEFAULT_MAX_K;
+      const minK = DEFAULT_MIN_K;
+      const maxK = DEFAULT_MAX_K;
       const op = SEL_OP ? SEL_OP.value : '';
       return { letters, cribPairs, minK, maxK, op, autokeyAlgo: currentAutokeyAlgo() };
     }
@@ -3055,7 +3357,6 @@ try{
 
     function resetStop(){
       if (BTN_STOP){
-        BTN_STOP.style.display = 'none';
         BTN_STOP.disabled = true;
       }
     }
@@ -3063,14 +3364,8 @@ try{
     function updateStopVisibility(){
       updateAutokeyAlgoVisibility();
       if (!BTN_STOP) return;
-      if (currentJob){
-        BTN_STOP.style.display = 'inline-block';
-        BTN_STOP.disabled = false;
-        return;
-      }
-      const show = !!(SEL_OP && (SEL_OP.value === 'vig_custom_alpha' || SEL_OP.value === 'autokey_custom_alpha'));
-      BTN_STOP.style.display = show ? 'inline-block' : 'none';
-      BTN_STOP.disabled = !show;
+      BTN_STOP.style.display = 'inline-block';
+      BTN_STOP.disabled = !currentJob;
     }
 
     function stopWorker(summaryText, outText){
@@ -3090,6 +3385,7 @@ try{
         if (typeof summaryText === 'string' && SUMMARY) SUMMARY.textContent = summaryText;
         if (typeof outText === 'string' && OUT) OUT.textContent = outText;
       }
+      updateHeatMeter(null);
       currentJob = null;
       bruteCtx = null;
       resetStop();
@@ -3112,7 +3408,6 @@ try{
 
       if (BTN_TEST) BTN_TEST.disabled = true;
       if (BTN_STOP){
-        BTN_STOP.style.display = 'inline-block';
         BTN_STOP.disabled = false;
       }
       updateStopVisibility();
@@ -3169,12 +3464,13 @@ try{
         if (kind === 'result' || kind === 'done'){
           hideProgress();
           if (BTN_STOP){
-            BTN_STOP.style.display = 'none';
             BTN_STOP.disabled = true;
           }
           if (BTN_TEST) BTN_TEST.disabled = false;
           try { uaWorker.terminate(); } catch(e){}
           uaWorker = null;
+          currentJob = null;
+          updateStopVisibility();
 
           const baseResults = Array.isArray(data.results) && data.results.length ? data.results : streamed;
           if (!baseResults.length){
@@ -3207,41 +3503,25 @@ try{
             return;
           }
           baseResults.sort((a,b)=> (b.score||0) - (a.score||0));
-          if (SUMMARY) SUMMARY.textContent = `Found ${baseResults.length} solution(s) for ${modeLabel}.`;
-          if (OUT) OUT.textContent = '';
-          const target = OUT || document.createElement('div');
           const best = baseResults[0];
-          if (best && best.posRaw && best.kRaw){
-            const alphaInfo = alphabetInfoFromPositions(best.posRaw);
-            const alphaStr = alphaInfo.invString;
-            const block = document.createElement('pre');
-            const variantLine = isAutokey ? `variant:    ${autokeyAlgoLabel(payload.autokeyAlgo)}\n` : '';
-            const displayKey = isAutokey
-              ? (best.actualKey || best.kRaw.map(v => alphaInfo.inv[v] || '?').join(''))
-              : best.key;
-            const residuesLine = isAutokey ? `key residues: ${best.key}\n` : '';
-            block.textContent =
-              `Best candidate (m=${best.keyLength})\n` +
-              `${isAutokey ? 'initial key: ' : 'key residues: '}${displayKey}\n` +
-              residuesLine +
-              variantLine +
-              `alphabet:    ${alphaStr}\n\n` +
-              (best.full || '');
-            target.appendChild(block);
+          if (!best){
+            if (SUMMARY) SUMMARY.textContent = 'We searched the range but did not land on a readable decrypt.';
+            if (OUT) OUT.textContent = '';
+            updateHeatMeter(null);
+            return;
           }
-          baseResults.slice(0,50).forEach((r, idx)=>{
-            const row = document.createElement('div'); row.className = 'row';
-            const keyDisplay = isAutokey ? (r.actualKey || r.key) : r.key;
-            const residuesInfo = (isAutokey && r.actualKey && r.actualKey !== r.key) ? ` (residues ${r.key})` : '';
-            const head = document.createElement('div'); head.textContent = `#${idx+1}  m=${r.keyLength}  initialKey=${keyDisplay}${residuesInfo}`;
-            const body = document.createElement('div'); body.className = 'small muted'; body.textContent = r.preview || '';
-            row.appendChild(head);
-            row.appendChild(body);
-            target.appendChild(row);
-          });
-          if (!OUT){
-            const container = $("out");
-            if (container) container.appendChild(target);
+          if (OUT){
+            OUT.textContent = best.full || '';
+          }
+          const stats = computeEnglishStats(best.full || '');
+          const scored = updateHeatMeter(stats);
+          if (SUMMARY){
+            const pct = Math.round((scored.score || 0) * 100);
+            let mood = 'Chilly — try adding more crib letters to warm it up.';
+            if (pct >= 75) mood = 'Hot! This looks a lot like natural English.';
+            else if (pct >= 45) mood = 'Warm — you are closing in on a readable solution.';
+            else if (pct === 0) mood = 'We need more clues before the heat meter can move.';
+            SUMMARY.textContent = `Key length ${best.keyLength}: ${mood}`;
           }
         }
       };
@@ -3287,9 +3567,9 @@ try{
 
       if (BTN_BRUTE) BTN_BRUTE.disabled = true;
       if (BTN_STOP){
-        BTN_STOP.style.display = 'inline-block';
         BTN_STOP.disabled = false;
       }
+      updateStopVisibility();
       if (BRUTE_PANEL) BRUTE_PANEL.style.display = 'block';
       if (BRUTE_OUT) BRUTE_OUT.innerHTML = '';
       if (BRUTE_SUMMARY){
@@ -3343,7 +3623,6 @@ try{
         if (kind === 'brute_done'){
           hideProgress();
           if (BTN_STOP){
-            BTN_STOP.style.display = 'none';
             BTN_STOP.disabled = true;
           }
           if (BTN_BRUTE) BTN_BRUTE.disabled = false;
