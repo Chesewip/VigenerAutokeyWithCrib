@@ -107,6 +107,51 @@
       backdrop-filter:blur(12px);
       -webkit-backdrop-filter:blur(12px);
     }
+    .floating-panel.collapsed {
+      padding-bottom:18px;
+      gap:14px;
+    }
+    .floating-header {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:14px;
+    }
+    .floating-title {
+      flex:1;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .results-toggle {
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:8px 16px;
+      border-radius:999px;
+      border:1px solid rgba(244,114,182,0.35);
+      background:rgba(244,114,182,0.18);
+      color:var(--accent);
+      font-weight:700;
+      cursor:pointer;
+      box-shadow:0 12px 24px rgba(244,114,182,0.22);
+      transition:background .2s ease, box-shadow .2s ease, transform .15s ease;
+    }
+    .results-toggle:hover {
+      background:rgba(244,114,182,0.28);
+      box-shadow:0 18px 32px rgba(244,114,182,0.28);
+    }
+    .results-toggle:active {
+      transform:translateY(1px);
+    }
+    .floating-body {
+      display:flex;
+      flex-direction:column;
+      gap:18px;
+    }
+    .floating-panel.collapsed .floating-body {
+      display:none;
+    }
     #results {
       max-height:min(420px, 70vh);
       overflow-y:auto;
@@ -356,6 +401,9 @@
         padding:22px 22px 24px;
         border-radius:20px;
       }
+      .floating-header { flex-direction:column; align-items:flex-start; gap:12px; }
+      .results-toggle { display:inline-flex; align-self:flex-end; }
+      .floating-panel.collapsed { padding:18px 18px 20px; }
       #results { max-height:65vh; }
     }
 
@@ -438,15 +486,22 @@
     </section>
 
     <section class="floating-panel" id="results">
-      <h2>Step 3 · See how hot your guess is</h2>
-      <div id="summary" class="summary-text muted">No test run yet — add a few guesses to start!</div>
-      <div class="heat-meter">
-        <div class="heat-track">
-          <div id="heatFill" class="heat-fill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+      <div class="floating-header">
+        <div class="floating-title">
+          <h2>Step 3 · See how hot your guess is</h2>
+          <div id="summary" class="summary-text muted">No test run yet — add a few guesses to start!</div>
         </div>
-        <div class="heat-labels"><span>Cold</span><span>Hot!</span></div>
+        <button type="button" id="resultsToggle" class="results-toggle" aria-expanded="true" aria-controls="resultsBody">Hide details</button>
       </div>
-      <pre id="out"></pre>
+      <div class="floating-body" id="resultsBody">
+        <div class="heat-meter">
+          <div class="heat-track">
+            <div id="heatFill" class="heat-fill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+          </div>
+          <div class="heat-labels"><span>Cold</span><span>Hot!</span></div>
+        </div>
+        <pre id="out"></pre>
+      </div>
     </section>
 
     <section class="panel hidden-control" id="wordlistPanel">
@@ -498,6 +553,11 @@ let confettiCooling = false;
 let lastHeatScore = 0;
 let thinkingInterval = null;
 let thinkingIndex = 0;
+const MOBILE_RESULTS_QUERY = '(max-width: 720px)';
+let resultsCollapseMedia = (typeof window !== 'undefined' && typeof window.matchMedia === 'function')
+  ? window.matchMedia(MOBILE_RESULTS_QUERY)
+  : null;
+let resultsCollapsed = resultsCollapseMedia ? resultsCollapseMedia.matches : false;
 
 function isIOSSafari(){
   if (typeof navigator === 'undefined') return false;
@@ -520,6 +580,74 @@ function shouldDeferAutoFocus(){
   const ua = nav && nav.userAgent ? nav.userAgent : '';
   const isiOS = /iPad|iPhone|iPod/.test(ua);
   return hasTouch || isiOS;
+}
+
+function isMobileResultsView(){
+  if (resultsCollapseMedia) return resultsCollapseMedia.matches;
+  if (typeof window === 'undefined') return false;
+  return window.innerWidth <= 720;
+}
+
+function updateResultsToggleVisibility(){
+  const toggle = document.getElementById('resultsToggle');
+  if (!toggle) return;
+  const mobile = isMobileResultsView();
+  toggle.style.display = mobile ? 'inline-flex' : 'none';
+  if (!mobile){
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.textContent = 'Hide details';
+  }
+}
+
+function setResultsCollapsed(collapsed){
+  const panel = document.getElementById('results');
+  const toggle = document.getElementById('resultsToggle');
+  const mobile = isMobileResultsView();
+  const desired = !!collapsed;
+  resultsCollapsed = desired;
+  const shouldCollapse = desired && mobile;
+  if (panel){
+    panel.classList.toggle('collapsed', shouldCollapse);
+  }
+  if (toggle){
+    if (mobile){
+      toggle.textContent = shouldCollapse ? 'Show details' : 'Hide details';
+      toggle.setAttribute('aria-expanded', String(!shouldCollapse));
+    } else {
+      toggle.textContent = 'Hide details';
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+  }
+}
+
+function handleResultsMediaChange(){
+  updateResultsToggleVisibility();
+  setResultsCollapsed(resultsCollapsed);
+}
+
+function initResultsPanel(){
+  if (!resultsCollapseMedia && typeof window !== 'undefined' && typeof window.matchMedia === 'function'){
+    resultsCollapseMedia = window.matchMedia(MOBILE_RESULTS_QUERY);
+  }
+  updateResultsToggleVisibility();
+  resultsCollapsed = isMobileResultsView();
+  setResultsCollapsed(resultsCollapsed);
+  const toggle = document.getElementById('resultsToggle');
+  if (toggle){
+    toggle.addEventListener('click', () => {
+      setResultsCollapsed(!resultsCollapsed);
+    });
+  }
+  const listener = () => handleResultsMediaChange();
+  if (resultsCollapseMedia){
+    if (typeof resultsCollapseMedia.addEventListener === 'function'){
+      resultsCollapseMedia.addEventListener('change', listener);
+    } else if (typeof resultsCollapseMedia.addListener === 'function'){
+      resultsCollapseMedia.addListener(listener);
+    }
+  } else if (typeof window !== 'undefined'){
+    window.addEventListener('resize', listener);
+  }
 }
 
 function triggerConfetti(){
@@ -592,6 +720,9 @@ function setSummaryMessage(text, options){
   if (!summary) return;
   summary.textContent = text;
   const opts = options || {};
+  if (opts.forceExpand){
+    setResultsCollapsed(false);
+  }
   const isNoResult = !!opts.noResult;
   summary.classList.toggle('no-result', isNoResult);
   if (isNoResult){
@@ -2550,6 +2681,7 @@ try{
     }
     updateAutokeyAlgoVisibility();
     resetHeatMeter();
+    initResultsPanel();
 
     let uaWorker = null;
     let currentJob = null;
@@ -3819,8 +3951,7 @@ try{
           else if (pct >= 40) mood = '✨ Warming up — a few tweaks might crack it.';
           else if (pct > 0) mood = '🧊 Still chilly. Try sprinkling in more crib letters.';
           else mood = 'Add a few more confident letters so the meter can take a proper reading.';
-          const variantLabel = autokeyAlgoLabel(algo);
-          setSummaryMessage(`Key length ${best.keyLength} (${variantLabel}): ${mood} (${pct}% hot)`);
+          setSummaryMessage(`Key length ${best.keyLength}: ${mood} (${pct}% hot)`, { forceExpand: true });
         }
       };
 
@@ -3859,14 +3990,13 @@ try{
 
         if (CAND_CNT) CAND_CNT.textContent = '0';
 
-        const variantLabel = autokeyAlgoLabel(currentAlgo);
         const message = nextAlgoIndex === 0
-          ? `Thinking through the ${variantLabel} autokey twist…`
-          : `No clear text yet — trying the ${variantLabel} autokey twist next…`;
+          ? 'Thinking through the puzzle…'
+          : 'No clear text yet — trying another approach…';
         if (SUMMARY) setSummaryMessage(message);
 
         showProgress(1);
-        restartThinkingAnimation(`Thinking — ${variantLabel}`);
+        restartThinkingAnimation('Thinking');
 
         if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
         uaWorker = makeWorker();
@@ -3887,7 +4017,7 @@ try{
               const currentTotal = parseInt(panel.dataset.total || '0');
               if (!initializedTotal || currentTotal !== totalNum){
                 showProgress(totalNum);
-                restartThinkingAnimation(`Thinking — ${variantLabel}`);
+                restartThinkingAnimation('Thinking');
                 initializedTotal = true;
               }
               updateProgress(data.done|0);
@@ -3901,7 +4031,7 @@ try{
               const currentTotal = parseInt(panel.dataset.total || '0');
               if (!initializedTotal || currentTotal !== dynTotal){
                 showProgress(dynTotal);
-                restartThinkingAnimation(`Thinking — ${variantLabel}`);
+                restartThinkingAnimation('Thinking');
                 initializedTotal = true;
               }
               updateProgress(nodeSeen);
@@ -3929,8 +4059,7 @@ try{
             }
 
             if (SUMMARY){
-              const peekLabel = autokeyAlgoLabel(queue[0]);
-              setSummaryMessage(`Still frosty — switching to the ${peekLabel} autokey flavor…`);
+              setSummaryMessage('Still frosty — trying another approach…');
             }
 
             launchNext(nextAlgoIndex + 1);
