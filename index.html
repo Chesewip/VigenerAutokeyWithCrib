@@ -1811,7 +1811,7 @@ async function runUnknownAlphabetInline(){
       results.push({
         keyLength:kLen,
         key: keyResidues,
-        actualKey: isVigMode ? null : actualKey,
+        actualKey,
         alphabet: alphaInfo.invString,
         preview: dec.slice(0,160),
         score: fitness,
@@ -1896,19 +1896,22 @@ try{
     const best = results[0];
     if (best && best.posRaw && best.kRaw){
       const alphaInfo = alphabetInfoFromPositions(best.posRaw);
-      const alphaStr = alphaInfo.invString;
+      const alphaStr = best.alphabet || alphaInfo.invString;
       const fullText = isVigMode
         ? decryptWithCustomAlphabet(letters, best.posRaw, best.kRaw, best.vigAlgo || vigAlgo)
         : decryptAutokeyUnknownAlphabet(letters, best.posRaw, best.kRaw, autokeyAlgo);
-      const displayKey = isVigMode ? best.key : best.kRaw.map(v => alphaInfo.inv[v] || '?').join('');
-      const residuesLine = (!isVigMode && best.key) ? `key residues: ${best.key}\n` : '';
+      const keyResidues = best.key || (Array.isArray(best.kRaw) ? best.kRaw.map(v => String.fromCharCode(65+v)).join('') : '');
+      const resolvedKey = Array.isArray(best.kRaw) ? best.kRaw.map(v => alphaInfo.inv[v] || '?').join('') : (best.actualKey || '');
+      const initialKey = best.actualKey || resolvedKey;
+      const initialLine = initialKey ? `initial key: ${initialKey}\n` : '';
+      const residuesLine = keyResidues ? `key residues: ${keyResidues}\n` : '';
       const variantLine = isVigMode
         ? `variant:    ${variantAlgoLabel(best.vigAlgo || vigAlgo)}\n`
         : `variant:    ${variantAlgoLabel(best.autokeyAlgo || autokeyAlgo)}\n`;
       const fullBlock = document.createElement('pre');
       fullBlock.textContent =
         `Best candidate (m=${best.keyLength})\n` +
-        `initial key: ${displayKey}\n` +
+        initialLine +
         residuesLine +
         variantLine +
         `alphabet:    ${alphaStr}\n\n` +
@@ -1923,8 +1926,16 @@ try{
     : `Found ${results.length} solution(s) for autokey + unknown alphabet (${autokeyLabel}).`;
   results.slice(0,50).forEach((r,idx)=>{
     const div=document.createElement('div'); div.className='row';
-    const keyDisplay = (!isVigMode && r.actualKey) ? r.actualKey : r.key;
-    const residuesInfo = (!isVigMode && r.actualKey && r.actualKey !== r.key) ? ` (residues ${r.key})` : '';
+    const alphaInfo = (r.posRaw) ? alphabetInfoFromPositions(r.posRaw) : null;
+    const resolvedKey = (alphaInfo && Array.isArray(r.kRaw))
+      ? r.kRaw.map(v => alphaInfo.inv[v] || '?').join('')
+      : (r.actualKey || '');
+    const keyResidues = r.key || (Array.isArray(r.kRaw) ? r.kRaw.map(v => String.fromCharCode(65+v)).join('') : '');
+    const initialKey = r.actualKey || resolvedKey || keyResidues;
+    const residuesInfo = (keyResidues && (isVigMode || (r.actualKey && r.actualKey !== keyResidues)))
+      ? ` (residues ${keyResidues})`
+      : '';
+    const keyDisplay = initialKey;
     const variantTag = isVigMode
       ? ` | variant=${variantAlgoLabel(r.vigAlgo || vigAlgo)}`
       : (r.autokeyAlgo ? ` | variant=${variantAlgoLabel(r.autokeyAlgo)}` : '');
@@ -3108,8 +3119,10 @@ try{
                   const dec = decryptWithCustomAlphabet(letters, sol.pos, sol.k, vigAlgo);
                   const fit = englishFitness(dec.toUpperCase().replace(/[^A-Z]/g,'').split(''));
                   __candsFound++;
+                  const alphaInfo = buildAlphabetString(sol.pos);
                   const keyResidues = sol.k.map(v=>String.fromCharCode(65+v)).join('');
-                  results.push({ keyLength:m, key: keyResidues, actualKey: null, posRaw: sol.pos, kRaw: sol.k, score: fit, preview: dec.slice(0,200), full: dec, vigAlgo });
+                  const actualKey = sol.k.map(v => alphaInfo.inv[v] || '?').join('');
+                  results.push({ keyLength:m, key: keyResidues, actualKey, alphabet: alphaInfo.invString, posRaw: sol.pos, kRaw: sol.k, score: fit, preview: dec.slice(0,200), full: dec, vigAlgo });
                 }
               }
               postMessage({ kind:'progress', done:(m - minK + 1), total, label:'m='+m, candidatesFound: __candsFound });
@@ -3286,18 +3299,19 @@ try{
           const best = baseResults[0];
           if (best && best.posRaw && best.kRaw){
             const alphaInfo = alphabetInfoFromPositions(best.posRaw);
-            const alphaStr = alphaInfo.invString;
+            const alphaStr = best.alphabet || alphaInfo.invString;
             const block = document.createElement('pre');
             const variantLine = isAutokey
               ? `variant:    ${variantAlgoLabel(payload.autokeyAlgo)}\n`
               : `variant:    ${variantAlgoLabel(payload.vigAlgo || 'vigenere')}\n`;
-            const displayKey = isAutokey
-              ? (best.actualKey || best.kRaw.map(v => alphaInfo.inv[v] || '?').join(''))
-              : best.key;
-            const residuesLine = isAutokey ? `key residues: ${best.key}\n` : '';
+            const keyResidues = best.key || best.kRaw.map(v => String.fromCharCode(65+v)).join('');
+            const resolvedKey = best.actualKey || best.kRaw.map(v => alphaInfo.inv[v] || '?').join('');
+            const initialKey = resolvedKey;
+            const initialLine = initialKey ? `initial key: ${initialKey}\n` : '';
+            const residuesLine = keyResidues ? `key residues: ${keyResidues}\n` : '';
             block.textContent =
               `Best candidate (m=${best.keyLength})\n` +
-              `${isAutokey ? 'initial key: ' : 'key residues: '}${displayKey}\n` +
+              initialLine +
               residuesLine +
               variantLine +
               `alphabet:    ${alphaStr}\n\n` +
@@ -3306,8 +3320,17 @@ try{
           }
           baseResults.slice(0,50).forEach((r, idx)=>{
             const row = document.createElement('div'); row.className = 'row';
-            const keyDisplay = isAutokey ? (r.actualKey || r.key) : r.key;
-            const residuesInfo = (isAutokey && r.actualKey && r.actualKey !== r.key) ? ` (residues ${r.key})` : '';
+            const alphaInfo = (r.posRaw) ? alphabetInfoFromPositions(r.posRaw) : null;
+            const resolvedKey = r.actualKey || ((alphaInfo && Array.isArray(r.kRaw))
+              ? r.kRaw.map(v => alphaInfo.inv[v] || '?').join('')
+              : '');
+            const keyResidues = r.key || (Array.isArray(r.kRaw) ? r.kRaw.map(v => String.fromCharCode(65+v)).join('') : '');
+            const keyDisplay = resolvedKey || keyResidues;
+            const residuesInfo = keyResidues
+              ? (isAutokey
+                ? (r.actualKey && r.actualKey !== keyResidues ? ` (residues ${keyResidues})` : '')
+                : ` (residues ${keyResidues})`)
+              : '';
             const variantTag = isAutokey
               ? (r.autokeyAlgo ? ` | variant=${variantAlgoLabel(r.autokeyAlgo)}` : '')
               : ` | variant=${variantAlgoLabel(r.vigAlgo || payload.vigAlgo || 'vigenere')}`;
