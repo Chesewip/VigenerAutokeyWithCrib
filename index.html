@@ -105,6 +105,7 @@
       gap:18px;
       z-index:40;
       backdrop-filter:blur(12px);
+      -webkit-backdrop-filter:blur(12px);
     }
     #results {
       max-height:min(420px, 70vh);
@@ -144,6 +145,7 @@
       border:1px solid rgba(148,163,184,0.12);
       align-items:flex-start;
       overflow-x:auto;
+      -webkit-overflow-scrolling:touch;
     }
     .word {
       display:flex;
@@ -281,21 +283,6 @@
       font-weight:600;
       color:var(--muted);
     }
-    .stat-chips {
-      display:flex;
-      gap:12px;
-      flex-wrap:wrap;
-      margin-top:14px;
-    }
-    .chip {
-      background:rgba(8,17,35,0.85);
-      color:var(--muted);
-      padding:8px 14px;
-      border-radius:999px;
-      font-weight:700;
-      font-size:13px;
-      border:1px solid rgba(56,189,248,0.18);
-    }
     .hidden-control { display:none !important; }
     #progressPanel { display:none; width:100%; }
     #progressLabel { font-weight:800; font-size:22px; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); text-shadow:0 0 26px rgba(56,189,248,0.35); }
@@ -327,7 +314,9 @@
       .hero { width:100%; }
       .panel { padding:20px; }
       .grid { justify-content:center; }
-      .cell { width:44px; }
+      .cell { width:40px; }
+      .char { padding:6px 0; font-size:14px; }
+      input.cribin { min-height:40px; padding:8px 0; font-size:18px; }
       textarea { min-height:140px; }
       .floating-panel {
         width:calc(100% - 24px);
@@ -341,6 +330,10 @@
     @media (max-width: 480px) {
       .controls { justify-content:center; }
       .controls button { flex:1 1 100%; max-width:280px; }
+      .grid { gap:12px 10px; }
+      .cell { width:34px; }
+      .char { padding:5px 0; font-size:13px; }
+      input.cribin { min-height:36px; padding:6px 0; font-size:16px; }
       textarea { min-height:160px; }
       .floating-panel { bottom:calc(18px + env(safe-area-inset-bottom, 0px)); }
     }
@@ -419,10 +412,6 @@
         </div>
         <div class="heat-labels"><span>Cold</span><span>Hot!</span></div>
       </div>
-      <div class="stat-chips">
-        <div class="chip" id="chiStat">χ²: —</div>
-        <div class="chip" id="iocStat">IOC: —</div>
-      </div>
       <pre id="out"></pre>
     </section>
 
@@ -475,6 +464,16 @@ let confettiCooling = false;
 let lastHeatScore = 0;
 let thinkingInterval = null;
 let thinkingIndex = 0;
+
+function shouldDeferAutoFocus(){
+  if (typeof window === 'undefined') return false;
+  const nav = (typeof navigator !== 'undefined') ? navigator : null;
+  const touchPoints = nav && typeof nav.maxTouchPoints === 'number' ? nav.maxTouchPoints : 0;
+  const hasTouch = ('ontouchstart' in window) || touchPoints > 0;
+  const ua = nav && nav.userAgent ? nav.userAgent : '';
+  const isiOS = /iPad|iPhone|iPod/.test(ua);
+  return hasTouch || isiOS;
+}
 
 function triggerConfetti(){
   if (confettiCooling) return;
@@ -669,9 +668,7 @@ function scoreHeat(stats){
 
 function updateHeatMeter(stats){
   const heatFill = document.getElementById('heatFill');
-  const chiStat = document.getElementById('chiStat');
-  const iocStat = document.getElementById('iocStat');
-  if (!heatFill || !chiStat || !iocStat){
+  if (!heatFill){
     return { score: 0, chi: 0, ic: 0 };
   }
   if (!stats || !stats.length){
@@ -682,8 +679,6 @@ function updateHeatMeter(stats){
     heatFill.setAttribute('aria-valuenow', '0');
     heatFill.setAttribute('aria-valuemin', '0');
     heatFill.setAttribute('aria-valuemax', '100');
-    chiStat.textContent = 'χ²: —';
-    iocStat.textContent = 'IOC: —';
     return { score: 0, chi: 0, ic: 0 };
   }
   const scored = scoreHeat(stats);
@@ -700,10 +695,6 @@ function updateHeatMeter(stats){
     triggerConfetti();
   }
   lastHeatScore = pct;
-  const chiVal = scored.chi.toFixed(2);
-  const iocVal = scored.ic.toFixed(4);
-  chiStat.textContent = `χ²: ${chiVal}`;
-  iocStat.textContent = `IOC: ${iocVal}`;
   return scored;
 }
 
@@ -824,12 +815,15 @@ function renderGrid(){
   const grid = document.getElementById('grid');
   grid.innerHTML = '';
 
+  const fragment = document.createDocumentFragment();
+
   let letterIndex = 0;
   let wordWrap = null;
+  let firstEditableInput = null;
 
   const flushWord = () => {
     if (wordWrap && wordWrap.childNodes.length){
-      grid.appendChild(wordWrap);
+      fragment.appendChild(wordWrap);
     }
     wordWrap = null;
   };
@@ -856,7 +850,7 @@ function renderGrid(){
       flushWord();
       const breaker = document.createElement('div');
       breaker.className = 'line-break';
-      grid.appendChild(breaker);
+      fragment.appendChild(breaker);
       return;
     }
 
@@ -864,7 +858,7 @@ function renderGrid(){
       flushWord();
       const spacer = document.createElement('div');
       spacer.className = 'word-gap';
-      grid.appendChild(spacer);
+      fragment.appendChild(spacer);
       return;
     }
 
@@ -883,10 +877,14 @@ function renderGrid(){
 
     const crib = document.createElement('input');
     crib.className = 'cribin';
+    crib.type = 'text';
     crib.maxLength = 1;
     crib.dataset.pos = idx;
     crib.placeholder = '';
     crib.title = 'Type a single plaintext letter (or leave blank)';
+    crib.autocomplete = 'off';
+    crib.autocapitalize = 'characters';
+    crib.inputMode = 'latin';
 
     if (!isLetter(ch)){
       crib.disabled = true;
@@ -894,6 +892,9 @@ function renderGrid(){
     } else {
       cell.dataset.letterIdx = letterIndex;
       letterIndex++;
+      if (!firstEditableInput){
+        firstEditableInput = crib;
+      }
 
       // Selection mode click handler
       cell.addEventListener('click', (e) => {
@@ -938,9 +939,11 @@ function renderGrid(){
   });
 
   flushWord();
+  grid.appendChild(fragment);
 
-  const first = grid.querySelector('input.cribin:not([disabled])');
-  if (first) first.focus();
+  if (firstEditableInput && !shouldDeferAutoFocus()){
+    firstEditableInput.focus();
+  }
 }
 // ===== Data extraction =====
 function gatherCribs(){
