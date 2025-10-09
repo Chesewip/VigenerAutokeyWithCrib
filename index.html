@@ -20,18 +20,6 @@
       font-family:'Nunito', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
     }
     *, *::before, *::after { box-sizing:border-box; }
-    .thinking-panel {
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      text-align:center;
-      min-height:96px;
-      background:rgba(255,255,255,0.85);
-      border-radius:18px;
-      border:1px solid rgba(251,207,232,0.6);
-      box-shadow:0 18px 38px rgba(180,206,145,0.35);
-      padding:18px;
-    }
     .thinking-text {
       font-size:22px;
       font-weight:800;
@@ -123,11 +111,81 @@
       flex-direction:column;
       gap:8px;
     }
+    .floating-actions {
+      display:flex;
+      flex-direction:column;
+      gap:16px;
+    }
+    .floating-action-row {
+      display:flex;
+      gap:12px;
+      align-items:center;
+      justify-content:center;
+      flex-wrap:wrap;
+    }
+    #floatingTestRow {
+      display:none;
+      justify-content:center;
+    }
+    .results-cta {
+      padding:12px 26px;
+      border-radius:999px;
+      border:none;
+      font-weight:800;
+      letter-spacing:0.02em;
+      cursor:pointer;
+      background:linear-gradient(135deg, #bef264, #fbcfe8);
+      color:#134e4a;
+      box-shadow:0 20px 34px rgba(186,230,253,0.45);
+      transition:transform .15s ease, box-shadow .2s ease;
+    }
+    .results-cta:hover {
+      transform:translateY(-1px);
+      box-shadow:0 24px 42px rgba(186,230,253,0.5);
+    }
+    .results-cta:disabled {
+      opacity:.45;
+      cursor:not-allowed;
+      box-shadow:none;
+      transform:none;
+    }
+    #progressPanel {
+      display:none;
+      width:100%;
+      justify-content:center;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    #progressLabel {
+      font-size:18px;
+    }
+    .results-stop {
+      padding:10px 18px;
+      border-radius:999px;
+      font-weight:700;
+      cursor:pointer;
+      background:rgba(255,255,255,0.9);
+      color:var(--muted);
+      border:1px solid rgba(190,242,100,0.6);
+      box-shadow:0 14px 28px rgba(214,232,200,0.55);
+      transition:transform .15s ease, box-shadow .2s ease;
+    }
+    .results-stop:hover {
+      transform:translateY(-1px);
+      box-shadow:0 18px 32px rgba(214,232,200,0.65);
+    }
+    .results-stop:disabled {
+      opacity:.45;
+      cursor:not-allowed;
+      transform:none;
+      box-shadow:none;
+    }
     .results-toggle {
+      align-self:flex-end;
       display:none;
       align-items:center;
       justify-content:center;
-      padding:8px 16px;
+      padding:8px 18px;
       border-radius:999px;
       border:1px solid rgba(244,114,182,0.35);
       background:rgba(244,114,182,0.18);
@@ -149,9 +207,7 @@
       flex-direction:column;
       gap:18px;
     }
-    .floating-panel.collapsed .floating-body {
-      display:none;
-    }
+    .floating-panel.collapsed .floating-body { display:none; }
     #results {
       max-height:min(420px, 70vh);
       overflow-y:auto;
@@ -361,8 +417,7 @@
       color:var(--muted);
     }
     .hidden-control { display:none !important; }
-    #progressPanel { display:none; width:100%; }
-    #progressLabel { font-weight:800; font-size:22px; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); text-shadow:0 0 26px rgba(244,114,182,0.35); }
+    #progressLabel { font-weight:800; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); text-shadow:0 0 26px rgba(244,114,182,0.35); }
 
     .confetti-container {
       position:fixed;
@@ -401,6 +456,8 @@
         padding:22px 22px 24px;
         border-radius:20px;
       }
+      #floatingTestRow { display:flex; }
+      .floating-actions { gap:14px; }
       .floating-header { flex-direction:column; align-items:flex-start; gap:12px; }
       .results-toggle { display:inline-flex; align-self:flex-end; }
       .floating-panel.collapsed { padding:18px 18px 20px; }
@@ -446,7 +503,7 @@
 
   <div class="panels">
     <section class="panel" id="setupPanel">
-      <h2>Step 1 · Meet the mystery</h2>
+      <h2>Meet the mystery</h2>
       <p class="muted">We've loaded a puzzling cipher that keeps all punctuation and spacing intact so everything lines up perfectly while you solve.</p>
       <div class="hidden-control">
         <textarea id="ctext">Rc qipv jhx vld plson fhceuh itp jui gh qhzu dg sq xie dhw. U gbfl lf fluz pcag wrgkv zw, dinyg zw, qge gnvm L fhx.</textarea>
@@ -480,7 +537,7 @@
     </section>
 
     <section class="panel" id="gridPanel">
-      <h2>Step 2 · Fill in what you know</h2>
+      <h2>Fill in what you know</h2>
       <p class="muted">Click under each letter and type your guess. We'll only let you edit the spots that are real letters.</p>
       <div id="grid" class="grid"></div>
     </section>
@@ -488,18 +545,27 @@
     <section class="floating-panel" id="results">
       <div class="floating-header">
         <div class="floating-title">
-          <h2>Step 3 · See how hot your guess is</h2>
+          <h2>Results</h2>
           <div id="summary" class="summary-text muted">No test run yet — add a few guesses to start!</div>
         </div>
-        <button type="button" id="resultsToggle" class="results-toggle" aria-expanded="true" aria-controls="resultsBody">Hide details</button>
       </div>
-      <div class="floating-body" id="resultsBody">
+      <div class="floating-actions" id="resultsActions">
+        <div class="floating-action-row" id="floatingTestRow">
+          <button id="testFloating" type="button" class="results-cta">Test My Guess</button>
+        </div>
+        <div class="floating-action-row" id="progressPanel">
+          <div id="progressLabel" class="thinking-text">Thinking...</div>
+          <button id="stopFloating" type="button" class="results-stop secondary">Stop Thinking</button>
+        </div>
         <div class="heat-meter">
           <div class="heat-track">
             <div id="heatFill" class="heat-fill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
           </div>
           <div class="heat-labels"><span>Cold</span><span>Hot!</span></div>
         </div>
+        <button type="button" id="resultsToggle" class="results-toggle" aria-expanded="true" aria-controls="resultsBody">Hide results</button>
+      </div>
+      <div class="floating-body" id="resultsBody">
         <pre id="out"></pre>
       </div>
     </section>
@@ -595,7 +661,7 @@ function updateResultsToggleVisibility(){
   toggle.style.display = mobile ? 'inline-flex' : 'none';
   if (!mobile){
     toggle.setAttribute('aria-expanded', 'true');
-    toggle.textContent = 'Hide details';
+    toggle.textContent = 'Hide results';
   }
 }
 
@@ -611,10 +677,10 @@ function setResultsCollapsed(collapsed){
   }
   if (toggle){
     if (mobile){
-      toggle.textContent = shouldCollapse ? 'Show details' : 'Hide details';
+      toggle.textContent = shouldCollapse ? 'See results' : 'Hide results';
       toggle.setAttribute('aria-expanded', String(!shouldCollapse));
     } else {
-      toggle.textContent = 'Hide details';
+      toggle.textContent = 'Hide results';
       toggle.setAttribute('aria-expanded', 'true');
     }
   }
@@ -623,6 +689,7 @@ function setResultsCollapsed(collapsed){
 function handleResultsMediaChange(){
   updateResultsToggleVisibility();
   setResultsCollapsed(resultsCollapsed);
+  setFloatingThinking(!!currentJob);
 }
 
 function initResultsPanel(){
@@ -689,6 +756,7 @@ function updateThinkingLabel(){
 
 function restartThinkingAnimation(baseLabel){
   const panel = ensureProgressPanel();
+  if (!panel) return;
   panel.dataset.baseLabel = baseLabel || 'Thinking';
   thinkingIndex = 0;
   updateThinkingLabel();
@@ -1764,30 +1832,34 @@ document.getElementById('bruteForce').addEventListener('click', bruteForceWordli
 
 // ===== Progress (lazy) =====
 function ensureProgressPanel(){
-  let panel = document.getElementById('progressPanel');
-  if (panel) return panel;
-  const after = document.getElementById('out');
-  panel = document.createElement('div');
-  panel.id = 'progressPanel';
-  panel.className = 'thinking-panel';
-  const lab = document.createElement('div');
-  lab.id = 'progressLabel';
-  lab.className = 'thinking-text';
-  lab.textContent = 'Thinking...';
-  panel.appendChild(lab);
-  if (after && after.parentNode){
-    after.parentNode.insertBefore(panel, after.nextSibling);
-  } else {
-    document.body.appendChild(panel);
+  return document.getElementById('progressPanel');
+}
+
+function setFloatingThinking(isThinking){
+  const testRow = document.getElementById('floatingTestRow');
+  const panel = ensureProgressPanel();
+  if (testRow){
+    if (isMobileResultsView()){
+      testRow.style.display = isThinking ? 'none' : 'flex';
+    } else {
+      testRow.style.display = '';
+    }
   }
-  return panel;
+  if (panel){
+    panel.style.display = isThinking ? 'flex' : 'none';
+  }
+  if (BTN_STOP_FLOAT){
+    BTN_STOP_FLOAT.disabled = !isThinking;
+  }
 }
 function showProgress(total){
   const panel = ensureProgressPanel();
-  panel.style.display = 'flex';
-  panel.dataset.total = String(Math.max(1, total || 1));
-  panel.dataset.done = '0';
+  if (panel){
+    panel.dataset.total = String(Math.max(1, total || 1));
+    panel.dataset.done = '0';
+  }
   lastHeatScore = 0;
+  setFloatingThinking(true);
   restartThinkingAnimation('Thinking');
 }
 function updateProgress(done){
@@ -1800,6 +1872,7 @@ function hideProgress(){
   if (panel){
     panel.style.display = 'none';
   }
+  setFloatingThinking(false);
   stopThinkingAnimation();
 }
 function uiYield(){ return new Promise(r=>setTimeout(r,0)); }
@@ -2648,6 +2721,8 @@ try{
     function $(id){ return document.getElementById(id); }
     const BTN_TEST = $("test");
     const BTN_STOP = $("stopSearch");
+    const BTN_TEST_FLOAT = $("testFloating");
+    const BTN_STOP_FLOAT = $("stopFloating");
     const SEL_OP   = $("op");
     const SEL_AUTOKEY_ALGO = $("autokeyAlgo");
     const LBL_AUTOKEY_ALGO = $("autokeyAlgoLabel");
@@ -2679,13 +2754,14 @@ try{
     if (SEL_AUTOKEY_ALGO){
       SEL_AUTOKEY_ALGO.value = normalizeAutokeyAlgo(SEL_AUTOKEY_ALGO.value);
     }
-    updateAutokeyAlgoVisibility();
-    resetHeatMeter();
-    initResultsPanel();
-
     let uaWorker = null;
     let currentJob = null;
     let bruteCtx = null;
+
+    updateAutokeyAlgoVisibility();
+    resetHeatMeter();
+    initResultsPanel();
+    setFloatingThinking(false);
 
     const AUTO_STOP_MS = 15000;
     const AUTO_STOP_MESSAGE = "Hmm… I need a little more information to confirm this one — try adding more crib letters and test again!";
@@ -3848,6 +3924,9 @@ try{
       if (BTN_STOP){
         BTN_STOP.disabled = true;
       }
+      if (BTN_STOP_FLOAT){
+        BTN_STOP_FLOAT.disabled = true;
+      }
     }
 
     function updateStopVisibility(){
@@ -3872,6 +3951,7 @@ try{
         if (typeof outText === 'string' && BRUTE_OUT) BRUTE_OUT.textContent = outText;
       } else {
         if (BTN_TEST) BTN_TEST.disabled = false;
+        if (BTN_TEST_FLOAT) BTN_TEST_FLOAT.disabled = false;
         if (typeof summaryText === 'string' && SUMMARY) setSummaryMessage(summaryText);
         if (typeof outText === 'string' && OUT) OUT.textContent = outText;
       }
@@ -3892,8 +3972,12 @@ try{
       bruteCtx = null;
 
       if (BTN_TEST) BTN_TEST.disabled = true;
+      if (BTN_TEST_FLOAT) BTN_TEST_FLOAT.disabled = true;
       if (BTN_STOP){
         BTN_STOP.disabled = false;
+      }
+      if (BTN_STOP_FLOAT){
+        BTN_STOP_FLOAT.disabled = false;
       }
       updateStopVisibility();
       if (OUT) OUT.textContent = '';
@@ -3914,7 +3998,11 @@ try{
         if (BTN_STOP){
           BTN_STOP.disabled = true;
         }
+        if (BTN_STOP_FLOAT){
+          BTN_STOP_FLOAT.disabled = true;
+        }
         if (BTN_TEST) BTN_TEST.disabled = false;
+        if (BTN_TEST_FLOAT) BTN_TEST_FLOAT.disabled = false;
         try { if (uaWorker) uaWorker.terminate(); } catch(e){}
         uaWorker = null;
         currentJob = null;
@@ -3961,7 +4049,11 @@ try{
         if (BTN_STOP){
           BTN_STOP.disabled = true;
         }
+        if (BTN_STOP_FLOAT){
+          BTN_STOP_FLOAT.disabled = true;
+        }
         if (BTN_TEST) BTN_TEST.disabled = false;
+        if (BTN_TEST_FLOAT) BTN_TEST_FLOAT.disabled = false;
         try { if (uaWorker) uaWorker.terminate(); } catch(e){}
         uaWorker = null;
         currentJob = null;
@@ -4206,23 +4298,33 @@ try{
       uaWorker.postMessage({ cmd:'bruteforce', ...payload });
     }
 
+    function handleStop(ev){
+      ev.preventDefault();
+      const msg = currentJob === 'brute' ? 'Brute force cancelled.' : 'Search cancelled.';
+      stopWorker(msg);
+    }
+
     if (BTN_STOP){
-      BTN_STOP.addEventListener('click', (ev)=>{
+      BTN_STOP.addEventListener('click', handleStop);
+    }
+    if (BTN_STOP_FLOAT){
+      BTN_STOP_FLOAT.addEventListener('click', handleStop);
+    }
+
+    function handleTest(ev){
+      const op = SEL_OP ? SEL_OP.value : '';
+      if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
         ev.preventDefault();
-        const msg = currentJob === 'brute' ? 'Brute force cancelled.' : 'Search cancelled.';
-        stopWorker(msg);
-      });
+        ev.stopImmediatePropagation();
+        startWorkerSolve();
+      }
     }
 
     if (BTN_TEST){
-      BTN_TEST.addEventListener('click', (ev)=>{
-        const op = SEL_OP ? SEL_OP.value : '';
-        if (op === 'vig_custom_alpha' || op === 'autokey_custom_alpha'){
-          ev.preventDefault();
-          ev.stopImmediatePropagation();
-          startWorkerSolve();
-        }
-      }, true);
+      BTN_TEST.addEventListener('click', handleTest, true);
+    }
+    if (BTN_TEST_FLOAT){
+      BTN_TEST_FLOAT.addEventListener('click', handleTest, true);
     }
 
     if (SEL_OP){
