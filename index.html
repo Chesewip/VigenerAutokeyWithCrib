@@ -2466,6 +2466,27 @@ try{
     let currentJob = null;
     let bruteCtx = null;
 
+    const AUTO_STOP_MS = 15000;
+    const AUTO_STOP_MESSAGE = "Hmm… I need a little more information to confirm this one — try adding more crib letters and test again!";
+    let autoStopTimer = null;
+
+    function clearAutoStopTimer(){
+      if (autoStopTimer){
+        clearTimeout(autoStopTimer);
+        autoStopTimer = null;
+      }
+    }
+
+    function scheduleAutoStop(){
+      clearAutoStopTimer();
+      autoStopTimer = setTimeout(() => {
+        stopWorker(AUTO_STOP_MESSAGE, '');
+        if (SUMMARY){
+          setSummaryMessage(AUTO_STOP_MESSAGE, { noResult: true });
+        }
+      }, AUTO_STOP_MS);
+    }
+
     function updateAutokeyAlgoVisibility(){
       if (!SEL_AUTOKEY_ALGO) return;
       const op = SEL_OP ? SEL_OP.value : '';
@@ -3616,6 +3637,7 @@ try{
     }
 
     function stopWorker(summaryText, outText){
+      clearAutoStopTimer();
       if (uaWorker){
         try { uaWorker.postMessage({cmd:'cancel'}); } catch(e){}
         try { uaWorker.terminate(); } catch(e){}
@@ -3662,6 +3684,7 @@ try{
       if (OUT) OUT.textContent = '';
       if (CAND_CNT) CAND_CNT.textContent = '0';
       showProgress(1);
+      scheduleAutoStop();
 
       if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
       uaWorker = makeWorker();
@@ -3708,6 +3731,7 @@ try{
           return;
         }
         if (kind === 'result' || kind === 'done'){
+          clearAutoStopTimer();
           hideProgress();
           if (BTN_STOP){
             BTN_STOP.disabled = true;
