@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Puzzle Decrypter Playground</title>
   <style>
-#progressBar{background:#f97316;height:100%;width:0%;transition:width .3s ease}
-
     :root{
       --bg:#020617;
       --panel:#0f172a;
@@ -20,6 +18,21 @@
       --hot:#f97316;
       --cold:#38bdf8;
       font-family:'Nunito', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    }
+    .thinking-panel {
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      min-height:110px;
+    }
+    .thinking-text {
+      font-size:22px;
+      font-weight:800;
+      letter-spacing:0.12em;
+      text-transform:uppercase;
+      color:var(--accent);
+      text-shadow:0 0 26px rgba(56,189,248,0.35);
     }
     body {
       margin: 0;
@@ -252,17 +265,31 @@
       border:1px solid rgba(56,189,248,0.18);
     }
     .hidden-control { display:none !important; }
-    #progressWrap {
-      display:none;
-      margin-top:14px;
-      background:rgba(15,23,42,0.9);
-      border-radius:999px;
-      height:18px;
+    #progressPanel { display:none; }
+    #progressLabel { font-weight:800; font-size:22px; letter-spacing:0.12em; text-transform:uppercase; color:var(--accent); text-shadow:0 0 26px rgba(56,189,248,0.35); }
+
+    .confetti-container {
+      position:fixed;
+      inset:0;
+      pointer-events:none;
       overflow:hidden;
-      border:1px solid rgba(56,189,248,0.2);
+      z-index:9999;
     }
-    #progressLabel { margin-top:8px; font-weight:600; color:var(--muted); }
-    #progressInner { height:100%; background:linear-gradient(90deg, var(--cold), var(--accent)); width:0%; transition:width .3s ease; }
+    .confetti-piece {
+      position:absolute;
+      top:-12vh;
+      width:8px;
+      height:18px;
+      border-radius:3px;
+      opacity:0;
+      transform:translate3d(0,-120vh,0) rotate(0deg);
+      animation:confettiFall 2.2s ease-in forwards;
+    }
+    @keyframes confettiFall {
+      0% { opacity:0; transform:translate3d(0,-120vh,0) rotate(0deg); }
+      10% { opacity:1; }
+      100% { opacity:0; transform:translate3d(var(--confetti-x, 0px), 120vh, 0) rotate(360deg); }
+    }
     @media (max-width: 720px) {
       body { padding:24px 16px; }
       .hero { width:100%; }
@@ -333,7 +360,7 @@
 
       <div class="controls">
         <button id="render" class="secondary">Refresh Puzzle</button>
-        <button id="stopSearch" class="secondary" disabled>Stop Search</button>
+        <button id="stopSearch" class="secondary" disabled>Stop Thinking</button>
         <button id="test">Test My Guess</button>
       </div>
     </section>
@@ -402,6 +429,71 @@ const isLetter = ch => /[A-Za-z]/.test(ch);
 const sanitize = s => s.toUpperCase().replace(/[^A-Z]/g,'');
 
 let wordlist = [];
+
+const CONFETTI_COLORS = ['#38bdf8', '#f97316', '#a855f7', '#22d3ee', '#facc15'];
+const THINKING_STATES = ['.', '..', '...'];
+let confettiCooling = false;
+let lastHeatScore = 0;
+let thinkingInterval = null;
+let thinkingIndex = 0;
+
+function triggerConfetti(){
+  if (confettiCooling) return;
+  confettiCooling = true;
+  const container = document.createElement('div');
+  container.className = 'confetti-container';
+  const pieceCount = 110;
+  for (let i = 0; i < pieceCount; i++){
+    const piece = document.createElement('span');
+    piece.className = 'confetti-piece';
+    piece.style.background = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
+    piece.style.left = `${Math.random() * 100}%`;
+    piece.style.width = `${5 + Math.random() * 6}px`;
+    piece.style.height = `${10 + Math.random() * 12}px`;
+    piece.style.animationDelay = `${Math.random() * 0.6}s`;
+    piece.style.animationDuration = `${1.6 + Math.random() * 0.9}s`;
+    piece.style.transform = `rotate(${Math.random() * 360}deg)`;
+    piece.style.setProperty('--confetti-x', `${(Math.random() * 220) - 110}px`);
+    container.appendChild(piece);
+  }
+  document.body.appendChild(container);
+  setTimeout(() => {
+    container.remove();
+  }, 2300);
+  setTimeout(() => {
+    confettiCooling = false;
+  }, 1200);
+}
+
+function updateThinkingLabel(){
+  const label = document.getElementById('progressLabel');
+  const panel = document.getElementById('progressPanel');
+  if (!label || !panel) return;
+  const base = panel.dataset.baseLabel || 'Thinking';
+  const suffix = THINKING_STATES[thinkingIndex % THINKING_STATES.length];
+  label.textContent = `${base}${suffix}`;
+}
+
+function restartThinkingAnimation(baseLabel){
+  const panel = ensureProgressPanel();
+  panel.dataset.baseLabel = baseLabel || 'Thinking';
+  thinkingIndex = 0;
+  updateThinkingLabel();
+  if (thinkingInterval){
+    clearInterval(thinkingInterval);
+  }
+  thinkingInterval = setInterval(() => {
+    thinkingIndex = (thinkingIndex + 1) % THINKING_STATES.length;
+    updateThinkingLabel();
+  }, 520);
+}
+
+function stopThinkingAnimation(){
+  if (thinkingInterval){
+    clearInterval(thinkingInterval);
+    thinkingInterval = null;
+  }
+}
 
 const NO_RESULT_MESSAGES = [
   "That wasn't it! The cipher sprites are asking for another guess.",
@@ -544,6 +636,7 @@ function updateHeatMeter(stats){
     return { score: 0, chi: 0, ic: 0 };
   }
   if (!stats || !stats.length){
+    lastHeatScore = 0;
     heatFill.style.width = '0%';
     heatFill.style.opacity = '0.35';
     heatFill.style.boxShadow = 'none';
@@ -564,6 +657,10 @@ function updateHeatMeter(stats){
   heatFill.setAttribute('aria-valuenow', String(pct));
   heatFill.setAttribute('aria-valuemin', '0');
   heatFill.setAttribute('aria-valuemax', '100');
+  if (pct >= 96 && pct > lastHeatScore){
+    triggerConfetti();
+  }
+  lastHeatScore = pct;
   const chiVal = scored.chi.toFixed(2);
   const iocVal = scored.ic.toFixed(4);
   chiStat.textContent = `χ²: ${chiVal}`;
@@ -1450,42 +1547,41 @@ function ensureProgressPanel(){
   let panel = document.getElementById('progressPanel');
   if (panel) return panel;
   const after = document.getElementById('out');
-  panel = document.createElement('div'); panel.id='progressPanel'; panel.className='panel';
-  const lab = document.createElement('div'); lab.id='progressLabel'; lab.className='small muted'; lab.textContent='Working…';
-  const wrap = document.createElement('div'); wrap.style.cssText='position:relative;height:14px;background:rgba(255,255,255,0.08);border-radius:6px;overflow:hidden;margin-top:6px';
-  const bar = document.createElement('div'); bar.id='progressBar'; bar.style.cssText='height:100%;width:0%';
-  const pct = document.createElement('div'); pct.id='progressPct'; pct.style.cssText='position:absolute;left:0;top:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:12px';
-  pct.textContent='0%';
-  wrap.appendChild(bar); wrap.appendChild(pct);
-  panel.appendChild(lab); panel.appendChild(wrap);
-  after && after.parentNode.insertBefore(panel, after.nextSibling);
+  panel = document.createElement('div');
+  panel.id = 'progressPanel';
+  panel.className = 'panel thinking-panel';
+  const lab = document.createElement('div');
+  lab.id = 'progressLabel';
+  lab.className = 'thinking-text';
+  lab.textContent = 'Thinking...';
+  panel.appendChild(lab);
+  if (after && after.parentNode){
+    after.parentNode.insertBefore(panel, after.nextSibling);
+  } else {
+    document.body.appendChild(panel);
+  }
   return panel;
 }
-function showProgress(total, label){
+function showProgress(total){
   const panel = ensureProgressPanel();
-  const bar = document.getElementById('progressBar');
-  const lab = document.getElementById('progressLabel');
-  const pct = document.getElementById('progressPct');
-  panel.style.display = 'block';
-  bar.style.width = '0%';
-  pct.textContent = '0% (0/' + total + ')';
-  lab.textContent = (label||'Working…') + ' 0/' + total;
-  panel.dataset.total = String(total);
+  panel.style.display = 'flex';
+  panel.dataset.total = String(Math.max(1, total || 1));
   panel.dataset.done = '0';
+  lastHeatScore = 0;
+  restartThinkingAnimation('Thinking');
 }
-function updateProgress(done, extra){
-  const panel = document.getElementById('progressPanel'); if (!panel) return;
-  const bar = document.getElementById('progressBar');
-  const lab = document.getElementById('progressLabel');
-  const pct = document.getElementById('progressPct');
-  const total = Math.max(1, parseInt(panel.dataset.total||'1'));
-  const pc = Math.max(0, Math.min(100, Math.floor(done*100/total)));
-  bar.style.width = pc + '%';
-  pct.textContent = pc + '% (' + done + '/' + total + ')';
-  lab.textContent = (extra? extra + ' — ': '') + done + '/' + total + ' (' + pc + '%)';
-  panel.dataset.done = String(done);
+function updateProgress(done){
+  const panel = document.getElementById('progressPanel');
+  if (!panel) return;
+  panel.dataset.done = String(Math.max(0, done|0));
 }
-function hideProgress(){ const p=document.getElementById('progressPanel'); if (p) p.style.display='none'; }
+function hideProgress(){
+  const panel = document.getElementById('progressPanel');
+  if (panel){
+    panel.style.display = 'none';
+  }
+  stopThinkingAnimation();
+}
 function uiYield(){ return new Promise(r=>setTimeout(r,0)); }
 
 // ===== Unknown alphabet Vigenère solver =====
@@ -2179,7 +2275,7 @@ async function runUnknownAlphabetInline(){
   const isVigMode = (op === 'vig_custom_alpha');
   const autokeyAlgo = currentAutokeyAlgo();
   const autokeyLabel = autokeyAlgoLabel(autokeyAlgo);
-  showProgress(total, isVigMode ? 'Unknown alphabet Vigenère' : `Autokey (${autokeyLabel}) + unknown alphabet`);
+  showProgress(total);
   const results=[];
   const coveragePerM = [];
   for (let kLen=minK; kLen<=maxK; kLen++){
@@ -2210,7 +2306,7 @@ async function runUnknownAlphabetInline(){
         kRaw: sol.k
       });
     }
-    updateProgress(kLen - minK + 1, 'm=' + kLen);
+    updateProgress(kLen - minK + 1);
     if ((kLen - minK) % 1 === 0) await uiYield();
   }
   hideProgress();
@@ -3565,7 +3661,7 @@ try{
       if (SUMMARY) setSummaryMessage(`Running ${modeLabel}…`);
       if (OUT) OUT.textContent = '';
       if (CAND_CNT) CAND_CNT.textContent = '0';
-      showProgress(1, 'Estimating search space…');
+      showProgress(1);
 
       if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
       uaWorker = makeWorker();
@@ -3587,10 +3683,10 @@ try{
             const totalNum = Math.max(1, data.total|0);
             const currentTotal = parseInt(panel.dataset.total || '0');
             if (!initializedTotal || currentTotal !== totalNum){
-              showProgress(totalNum, data.label || 'Working…');
+              showProgress(totalNum);
               initializedTotal = true;
             }
-            updateProgress(data.done|0, data.label || '');
+            updateProgress(data.done|0);
             return;
           }
           const dfs = data.p && data.p.kind === 'dfs' ? data.p : (kind === 'dfs' ? data : null);
@@ -3600,11 +3696,10 @@ try{
             const panel = ensureProgressPanel();
             const currentTotal = parseInt(panel.dataset.total || '0');
             if (!initializedTotal || currentTotal !== dynTotal){
-              showProgress(dynTotal, `m=${data.m ?? ''} — exploring search space…`);
+              showProgress(dynTotal);
               initializedTotal = true;
             }
-            const label = `m=${data.m ?? '?'}  nodes: ${nodeSeen.toLocaleString()} (continuing…)`;
-            updateProgress(nodeSeen, label);
+            updateProgress(nodeSeen);
             return;
           }
         }
@@ -3717,7 +3812,7 @@ try{
         BRUTE_SUMMARY.textContent = text;
       }
 
-      showProgress(Math.max(1, totalWords), 'Brute forcing wordlist…');
+      showProgress(Math.max(1, totalWords));
 
       if (uaWorker){ try { uaWorker.terminate(); } catch(e){} }
       uaWorker = makeWorker();
@@ -3730,7 +3825,7 @@ try{
         if (kind === 'brute_progress'){
           const total = Math.max(1, data.total|0);
           if (!progressInitialized){
-            showProgress(total, 'Brute forcing wordlist…');
+            showProgress(total);
             progressInitialized = true;
           }
           const done = data.done|0;
@@ -3738,8 +3833,7 @@ try{
           const skipped = data.skipped|0;
           const timedOut = typeof data.timedOut === 'number' ? data.timedOut|0 : 0;
           const processed = typeof data.processed === 'number' ? data.processed|0 : Math.max(done, checked + skipped);
-          const label = data.label || `Processed ${processed.toLocaleString()} / ${total.toLocaleString()} words`;
-          updateProgress(done, label);
+          updateProgress(done);
           if (BRUTE_SUMMARY){
             const timeoutPart = timedOut > 0 ? `, timed out ${timedOut.toLocaleString()}` : '';
             let text = `Processed ${processed.toLocaleString()} / ${total.toLocaleString()} words — checked ${checked.toLocaleString()} (skipped ${skipped.toLocaleString()}${timeoutPart}).`;
