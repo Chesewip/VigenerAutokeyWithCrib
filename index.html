@@ -558,12 +558,19 @@ function applyVigenereDecrypt(letters, template){
 }
 
 // ===== MAS+Vig (pre-sub on plaintext) =====
-function decodeMASVigLetters(lettersOnlyArr, key, subInv){
-  const m = key.length; const out=[];
+function decodeMASVigLetters(lettersOnlyArr, key, subInv, algorithm){
+  const m = key.length;
+  const out = [];
+  const mod = (x)=>((x%26)+26)%26;
+  const ops = variantOpsFor(algorithm);
+  const plainFromCipherKey = (c, k) => mod(ops.plainFromCipherKey(c, k));
   for (let i=0;i<lettersOnlyArr.length;i++){
     const c = A2I[lettersOnlyArr[i]];
-    const x = (c - key[i % m] + 26) % 26;
-    out.push( A[ subInv[x] ] );
+    const keyVal = mod(key[i % m]);
+    const preSub = plainFromCipherKey(c, keyVal);
+    const plainIdx = subInv[preSub];
+    const resolved = (plainIdx != null) ? plainIdx : preSub;
+    out.push(A[mod(resolved)]);
   }
   return out;
 }
@@ -571,7 +578,7 @@ function decodeMASVigLetters(lettersOnlyArr, key, subInv){
 function identityPerm(){ return [...Array(26).keys()]; }
 function swapInPlace(arr,i,j){ const t=arr[i]; arr[i]=arr[j]; arr[j]=t; }
 
-function solveMASVigDeterministic(cLetters, constraints, minK, maxK){
+function solveMASVigDeterministic(cLetters, constraints, minK, maxK, algorithm){
   const results=[];
   function fillPerm(p){ const used=new Set(p.filter(v=>v!==null)); const rem=[]; for(let v=0; v<26; v++) if(!used.has(v)) rem.push(v); const out=p.slice(); for(let i=0;i<26;i++){ if(out[i]===null) out[i]=rem.shift(); } return out; }
   function invertPerm(p){ const inv=new Array(26); for(let i=0;i<26;i++){ inv[p[i]] = i; } return inv; }
@@ -579,14 +586,20 @@ function solveMASVigDeterministic(cLetters, constraints, minK, maxK){
     const s = new Array(26).fill(null);
     const k = new Array(m).fill(null);
     const cons = constraints.map(o=>({ r: o.pos % m, cIdx:o.cIdx, pIdx:o.pIdx }));
+    const mod = (x)=>((x%26)+26)%26;
+    const algo = normalizeVariantAlgo(algorithm);
+    const ops = variantOpsFor(algo);
+    const keyFromPlainCipher = (p, c) => mod(ops.keyFromPlainCipher(p, c));
+    const cipherFromPlainKey = (p, keyVal) => mod(ops.cipherFromPlainKey(p, keyVal));
+    const plainFromCipherKey = (c, keyVal) => mod(ops.plainFromCipherKey(c, keyVal));
     function propagate(){
       let changed=true;
       while (changed){
         changed=false;
         for (const {r,cIdx,pIdx} of cons){
-          if (k[r]!==null && s[pIdx]===null){ const val=((cIdx - k[r])%26+26)%26; if (s[pIdx]===null){ s[pIdx]=val; changed=true; } else if (s[pIdx]!==val){ return false; } }
-          if (s[pIdx]!==null && k[r]===null){ const val=((cIdx - s[pIdx])%26+26)%26; if (k[r]===null){ k[r]=val; changed=true; } else if (k[r]!==val){ return false; } }
-          if (s[pIdx]!==null && k[r]!==null){ if ( ((cIdx - s[pIdx])%26+26)%26 !== k[r]) return false; }
+          if (k[r]!==null && s[pIdx]===null){ const val=plainFromCipherKey(cIdx, k[r]); if (s[pIdx]===null){ s[pIdx]=val; changed=true; } else if (s[pIdx]!==val){ return false; } }
+          if (s[pIdx]!==null && k[r]===null){ const val=keyFromPlainCipher(s[pIdx], cIdx); if (k[r]===null){ k[r]=val; changed=true; } else if (k[r]!==val){ return false; } }
+          if (s[pIdx]!==null && k[r]!==null){ if (cipherFromPlainKey(s[pIdx], k[r]) !== mod(cIdx)) return false; }
         }
         const seen=new Set();
         for (let i=0;i<26;i++){ const v=s[i]; if (v===null) continue; if (seen.has(v)) return false; seen.add(v); }
@@ -601,10 +614,10 @@ function solveMASVigDeterministic(cLetters, constraints, minK, maxK){
       for (let r=0;r<m;r++){ if (k[r]===null && counts[r]>best){best=counts[r]; rr=r;} }
       if (rr<0) return {s:s.slice(), k:k.slice()};
       let cand = null;
-      for (const {r,cIdx,pIdx} of cons){ if (r===rr && s[pIdx]!==null){ cand = [ ((cIdx - s[pIdx])%26+26)%26 ]; break; } }
+      for (const {r,cIdx,pIdx} of cons){ if (r===rr && s[pIdx]!==null){ cand = [ keyFromPlainCipher(s[pIdx], cIdx) ]; break; } }
       if (!cand){ cand = [...Array(26).keys()]; }
       for (const val of cand){
-        const old = k[rr]; k[rr]=val;
+        const old = k[rr]; k[rr]=mod(val);
         const res = dfs(); if (res) return res;
         k[rr]=old;
       }
@@ -615,21 +628,25 @@ function solveMASVigDeterministic(cLetters, constraints, minK, maxK){
       const S = fillPerm(sol.s);
       const Sinv = invertPerm(S);
       const dec = [];
-      for (let i=0;i<cLetters.length;i++){ const c=A2I[cLetters[i]]; const p = Sinv[ ((c - sol.k[i % m])%26+26)%26 ]; dec.push(A[p]); }
-      results.push({m, key:sol.k, subInv:Sinv, plaintext:dec.join('')});
+      for (let i=0;i<cLetters.length;i++){ const c=A2I[cLetters[i]]; const preSub = plainFromCipherKey(c, sol.k[i % m]); const p = Sinv[preSub]; dec.push(A[p]); }
+      results.push({m, key:sol.k.map(v=>mod(v)), subInv:Sinv, plaintext:dec.join(''), vigAlgo: algo});
     }
   }
   return results.sort((a,b)=>b.plaintext.length-a.plaintext.length);
 }
 
-function solveMASVigSA(fullTextLetters, minK, maxK, iters=4000, tempStart=5.0, tempEnd=0.1, cribConstraints){
+function solveMASVigSA(fullTextLetters, minK, maxK, iters=4000, tempStart=5.0, tempEnd=0.1, cribConstraints, algorithm){
   const PENALTY = 200;
+  const mod = (x)=>((x%26)+26)%26;
+  const algo = normalizeVariantAlgo(algorithm);
+  const ops = variantOpsFor(algo);
+  const plainFromCipherKey = (c, keyVal) => mod(ops.plainFromCipherKey(c, keyVal));
   function violationsFor(key, subInv, constraints){
     if (!constraints || !constraints.length) return 0;
     let miss = 0; const m = key.length;
     for (const {pos, cIdx, pIdx} of constraints){
       const kj = key[pos % m];
-      const x = ((cIdx - kj) % 26 + 26) % 26;
+      const x = plainFromCipherKey(cIdx, kj);
       if (subInv[x] !== pIdx) miss++;
     }
     return miss;
@@ -641,7 +658,7 @@ function solveMASVigSA(fullTextLetters, minK, maxK, iters=4000, tempStart=5.0, t
     let subInv = identityPerm();
 
     const evalScore = (k, s) => {
-      const dec = decodeMASVigLetters(fullTextLetters, k, s);
+      const dec = decodeMASVigLetters(fullTextLetters, k, s, algo);
       const lang = englishFitness(dec);
       const miss = violationsFor(k, s, cribConstraints);
       return {score: lang - PENALTY*miss, lang, miss, dec};
@@ -663,7 +680,7 @@ function solveMASVigSA(fullTextLetters, minK, maxK, iters=4000, tempStart=5.0, t
         const j = (Math.random()*m)|0;
         const old = curKey[j];
         const delta = ((Math.random()*7)|0) - 3;
-        curKey[j] = (curKey[j] + delta + 26) % 26;
+        curKey[j] = mod(curKey[j] + delta);
         const {score:s} = evalScore(curKey, curSub);
         const accept = (s>curScore) || (Math.random() < Math.exp((s-curScore)/Math.max(1e-6,temp)));
         if (accept){
@@ -696,7 +713,7 @@ function solveMASVigSA(fullTextLetters, minK, maxK, iters=4000, tempStart=5.0, t
     }
 
     const dec = bestDec;
-    results.push({m, key:bestKey, subInv:bestSub, score:bestScore, lang:bestLang, violations:bestMiss, plaintext:dec.join('')});
+    results.push({m, key:bestKey.map(v=>mod(v)), subInv:bestSub, score:bestScore, lang:bestLang, violations:bestMiss, plaintext:dec.join(''), vigAlgo: algo});
   }
   results.sort((a,b)=>b.score-a.score);
   return results;
@@ -762,7 +779,10 @@ function testCribs(){
     return;
   }
 
-  summary.textContent = `Testing ${segments.length} crib segment(s) for key lengths ${minK}..${maxK} using ${op}`;
+  const selectedVigAlgoRaw = (op === 'vig_custom_alpha' || op === 'vig_sub') ? currentVigAlgo() : null;
+  const selectedVigAlgo = selectedVigAlgoRaw ? normalizeVariantAlgo(selectedVigAlgoRaw) : null;
+  const variantSuffix = op === 'vig_sub' ? ` (${variantAlgoLabel(selectedVigAlgo || 'vigenere')})` : '';
+  summary.textContent = `Testing ${segments.length} crib segment(s) for key lengths ${minK}..${maxK} using ${op}${variantSuffix}`;
 
   if (op === 'vigenere'){
     const {cLetters} = buildLetterStreams(letters);
@@ -798,6 +818,8 @@ function testCribs(){
     return;
   }
 
+
+
   if (op === 'vig_sub'){
     const { cLetters } = buildLetterStreams(letters);
     const constraints = [];
@@ -814,35 +836,58 @@ function testCribs(){
         }
       }
     }
+    const algorithm = normalizeVariantAlgo(selectedVigAlgo || 'vigenere');
+    const variantLabel = variantAlgoLabel(algorithm);
+    const buildSubMapping = (subInv)=>{
+      const forward = new Array(26).fill(null);
+      if (Array.isArray(subInv)){
+        for (let i=0;i<26;i++){
+          const val = subInv[i];
+          if (val != null && val >= 0 && val < 26){
+            forward[val] = i;
+          }
+        }
+      }
+      const mappingStr = forward.map(v => v == null ? '?' : A[v]).join('');
+      return { forward, mappingStr };
+    };
+    const renderInitialKey = (keyArr, forward)=> keyArr.map(v => {
+      const idx = forward[v];
+      return idx == null ? A[v] : A[idx];
+    }).join('');
+
     let text='';
     if (constraints.length){
-      const det = solveMASVigDeterministic(cLetters, constraints, minK, maxK);
+      const det = solveMASVigDeterministic(cLetters, constraints, minK, maxK, algorithm);
       if (det.length){
         for (const r of det.slice(0,3)){
-          const keyStr = r.key.map(v=>A[v]).join('');
-          const S = new Array(26); for (let i=0;i<26;i++) S[ r.subInv[i] ] = i;
-          const sMap = S.map(x=>A[x]).join('');
-          text += `[exact from cribs] m=${r.m}  key=${keyStr}\n`;
-          text += `S mapping: ${sMap}\n`;
+          const residuesStr = r.key.map(v=>A[v]).join('');
+          const { forward, mappingStr } = buildSubMapping(r.subInv);
+          const initialKey = renderInitialKey(r.key, forward);
+          text += `[exact from cribs] m=${r.m}\n`;
+          text += `initial key: ${initialKey}\n`;
+          text += `key residues: ${residuesStr}\n`;
+          text += `variant:    ${variantLabel}\n`;
+          text += `S mapping: ${mappingStr}\n`;
           text += `crib-consistency: 100% (all crib letters satisfied)\n`;
-          let outFull=''; let kpos=0; for (let i=0;i<letters.length;i++){ const ch=letters[i]; if (!isLetter(ch)){ outFull+=ch; } else { outFull+= r.plaintext[kpos++]; } }
+          let outFull=''; let kpos=0; for (let i=0;i<letters.length;i++){ const ch=letters[i]; if (!isLetter(ch)){ outFull+=ch; } else { outFull+= r.plaintext[kpos++] || ''; } }
           text += 'Decrypt attempt:\n' + outFull + '\n\n';
         }
         out.textContent = text; return;
       }
     }
-    const res = solveMASVigSA(cLetters, minK, maxK, 6000, 6.0, 0.1, constraints);
+    const res = solveMASVigSA(cLetters, minK, maxK, 6000, 6.0, 0.1, constraints, algorithm);
     for (const r of res.slice(0,3)){
-      const keyStr = r.key.map(v=>A[v]).join('');
-      const S = new Array(26); for (let i=0;i<26;i++) S[ r.subInv[i] ] = i;
-      const sMap = S.map(x=>A[x]).join('');
-      text += `m=${r.m}  langScore/100=${(r.lang||r.score).toFixed(2)}
-key (residues): ${keyStr}
-S mapping: ${sMap}
-`;
-      if (constraints.length){ text += `crib-consistency: ${constraints.length - (r.violations||0)}/${constraints.length}
-`; }
-      let outFull=''; let kpos=0; for (let i=0;i<letters.length;i++){ const ch=letters[i]; if (!isLetter(ch)){ outFull+=ch; } else { outFull+= r.plaintext[kpos++]; } }
+      const residuesStr = r.key.map(v=>A[v]).join('');
+      const { forward, mappingStr } = buildSubMapping(r.subInv);
+      const initialKey = renderInitialKey(r.key, forward);
+      text += `m=${r.m}  langScore/100=${(r.lang||r.score).toFixed(2)}\n`;
+      text += `initial key: ${initialKey}\n`;
+      text += `key residues: ${residuesStr}\n`;
+      text += `variant:    ${variantLabel}\n`;
+      text += `S mapping: ${mappingStr}\n`;
+      if (constraints.length){ text += `crib-consistency: ${constraints.length - (r.violations||0)}/${constraints.length}\n`; }
+      let outFull=''; let kpos=0; for (let i=0;i<letters.length;i++){ const ch=letters[i]; if (!isLetter(ch)){ outFull+=ch; } else { outFull+= r.plaintext[kpos++] || ''; } }
       text += 'Decrypt attempt:\n' + outFull + '\n\n';
     }
     out.textContent = text || 'No result';
@@ -911,13 +956,14 @@ function bruteForceWordlist(){
   const bridgeNext = bridgeNextEl ? !!bridgeNextEl.checked : false;
   const nextSegmentLen = bridgeNext ? findNextCribSegmentAfter(letters, cribMap, endPos).length : 0;
 
-  let maxResults = parseInt(document.getElementById('maxResults').value, 10);
-  if (!Number.isFinite(maxResults) || maxResults <= 0){ maxResults = 20; }
-  const minK = parseInt(document.getElementById('minK').value, 10);
-  const maxK = parseInt(document.getElementById('maxK').value, 10);
-  const op = document.getElementById('op').value;
-  const selectedAutokeyAlgo = op === 'autokey_custom_alpha' ? currentAutokeyAlgo() : null;
-  const selectedVigAlgo = op === 'vig_custom_alpha' ? currentVigAlgo() : null;
+    let maxResults = parseInt(document.getElementById('maxResults').value, 10);
+    if (!Number.isFinite(maxResults) || maxResults <= 0){ maxResults = 20; }
+    const minK = parseInt(document.getElementById('minK').value, 10);
+    const maxK = parseInt(document.getElementById('maxK').value, 10);
+    const op = document.getElementById('op').value;
+    const selectedAutokeyAlgo = op === 'autokey_custom_alpha' ? currentAutokeyAlgo() : null;
+    const selectedVigAlgoRaw = (op === 'vig_custom_alpha' || op === 'vig_sub') ? currentVigAlgo() : null;
+    const selectedVigAlgo = selectedVigAlgoRaw ? normalizeVariantAlgo(selectedVigAlgoRaw) : null;
   const quickTrials = getQuickTrials();
   const trialDepth = getTrialDepth();
 
@@ -1978,7 +2024,7 @@ try{
 
     function updateVariantSelectors(){
       const op = SEL_OP ? SEL_OP.value : '';
-      const showVig = op === 'vig_custom_alpha';
+      const showVig = op === 'vig_custom_alpha' || op === 'vig_sub';
       const showAutokey = op === 'autokey_custom_alpha';
       if (SEL_VIG_ALGO){
         SEL_VIG_ALGO.style.display = showVig ? '' : 'none';
@@ -2615,8 +2661,14 @@ try{
           }
           return out;
         }
-        function solveMASVigDeterministic(cLetters, constraints, minK, maxK){
+        function solveMASVigDeterministic(cLetters, constraints, minK, maxK, algorithm){
           const results=[];
+          const mod = (x)=>((x%26)+26)%26;
+          const algo = normalizeVariantAlgo(algorithm);
+          const ops = variantOpsFor(algo);
+          const keyFromPlainCipher = (p, c) => mod(ops.keyFromPlainCipher(p, c));
+          const cipherFromPlainKey = (p, k) => mod(ops.cipherFromPlainKey(p, k));
+          const plainFromCipherKey = (c, k) => mod(ops.plainFromCipherKey(c, k));
           function fillPerm(p){ const used=new Set(p.filter(v=>v!==null)); const rem=[]; for(let v=0; v<26; v++) if(!used.has(v)) rem.push(v); const out=p.slice(); for(let i=0;i<26;i++){ if(out[i]===null) out[i]=rem.shift(); } return out; }
           function invertPerm(p){ const inv=new Array(26); for(let i=0;i<26;i++){ inv[p[i]] = i; } return inv; }
           for (let m=minK; m<=maxK; m++){
@@ -2628,9 +2680,9 @@ try{
               while (changed){
                 changed=false;
                 for (const {r,cIdx,pIdx} of cons){
-                  if (k[r]!==null && s[pIdx]===null){ const val=((cIdx - k[r])%26+26)%26; if (s[pIdx]===null){ s[pIdx]=val; changed=true; } else if (s[pIdx]!==val){ return false; } }
-                  if (s[pIdx]!==null && k[r]===null){ const val=((cIdx - s[pIdx])%26+26)%26; if (k[r]===null){ k[r]=val; changed=true; } else if (k[r]!==val){ return false; } }
-                  if (s[pIdx]!==null && k[r]!==null){ if ( ((cIdx - s[pIdx])%26+26)%26 !== k[r]) return false; }
+                  if (k[r]!==null && s[pIdx]===null){ const val=plainFromCipherKey(cIdx, k[r]); if (s[pIdx]===null){ s[pIdx]=val; changed=true; } else if (s[pIdx]!==val){ return false; } }
+                  if (s[pIdx]!==null && k[r]===null){ const val=keyFromPlainCipher(s[pIdx], cIdx); if (k[r]===null){ k[r]=val; changed=true; } else if (k[r]!==val){ return false; } }
+                  if (s[pIdx]!==null && k[r]!==null){ if (cipherFromPlainKey(s[pIdx], k[r]) !== mod(cIdx)) return false; }
                 }
                 const seen=new Set();
                 for (let i=0;i<26;i++){ const v=s[i]; if (v===null) continue; if (seen.has(v)) return false; seen.add(v); }
@@ -2645,10 +2697,10 @@ try{
               for (let r=0;r<m;r++){ if (k[r]===null && counts[r]>best){best=counts[r]; rr=r;} }
               if (rr<0) return {s:s.slice(), k:k.slice()};
               let cand = null;
-              for (const {r,cIdx,pIdx} of cons){ if (r===rr && s[pIdx]!==null){ cand = [ ((cIdx - s[pIdx])%26+26)%26 ]; break; } }
+              for (const {r,cIdx,pIdx} of cons){ if (r===rr && s[pIdx]!==null){ cand = [ keyFromPlainCipher(s[pIdx], cIdx) ]; break; } }
               if (!cand){ cand = [...Array(26).keys()]; }
               for (const val of cand){
-                const old = k[rr]; k[rr]=val;
+                const old = k[rr]; k[rr]=mod(val);
                 const res = dfs(); if (res) return res;
                 k[rr]=old;
               }
@@ -2659,8 +2711,8 @@ try{
               const S = fillPerm(sol.s);
               const Sinv = invertPerm(S);
               const dec = [];
-              for (let i=0;i<cLetters.length;i++){ const c=A2I[cLetters[i]]; const p = Sinv[ ((c - sol.k[i % m])%26+26)%26 ]; dec.push(A[p]); }
-              results.push({m, key:sol.k, subInv:Sinv, plaintext:dec.join('')});
+              for (let i=0;i<cLetters.length;i++){ const c=A2I[cLetters[i]]; const preSub = plainFromCipherKey(c, sol.k[i % m]); const p = Sinv[preSub]; dec.push(A[p]); }
+              results.push({m, key:sol.k.map(v=>mod(v)), subInv:Sinv, plaintext:dec.join(''), vigAlgo: algo});
             }
           }
           return results.sort((a,b)=>b.plaintext.length-a.plaintext.length);
@@ -3006,7 +3058,7 @@ try{
                     }
                   }
                   if (op === 'vig_sub'){
-                    const det = solveMASVigDeterministic(cLetters, constraints, k, k);
+                    const det = solveMASVigDeterministic(cLetters, constraints, k, k, vigAlgo);
                     if (det.length){
                       const r = det[0];
                       let outFull=''; let kpos=0;
@@ -3018,13 +3070,29 @@ try{
                       if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(outFull, nextSegment)) continue;
                       const decLetters = sanitize(outFull).split('');
                       const fitness = englishFitness(decLetters);
+                      const residuesStr = r.key.map(v=>A[v]).join('');
+                      const forward = new Array(26).fill(null);
+                      for (let i=0;i<26;i++){
+                        const invVal = r.subInv[i];
+                        if (invVal != null && invVal >= 0 && invVal < 26){
+                          forward[invVal] = i;
+                        }
+                      }
+                      const initialKey = r.key.map(v => {
+                        const mapped = forward[v];
+                        return mapped == null ? A[v] : A[mapped];
+                      }).join('');
+                      const mappingStr = forward.map(v => v == null ? '?' : A[v]).join('');
                       results.push({
                         word,
                         keyLength: k,
-                        key: r.key.map(v=>A[v]).join(''),
+                        key: residuesStr,
+                        actualKey: initialKey,
+                        alphabet: mappingStr,
                         decrypted: outFull,
                         fitness,
-                        op: 'vig_sub'
+                        op: 'vig_sub',
+                        vigAlgo
                       });
                     }
                   } else {
