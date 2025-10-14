@@ -521,23 +521,31 @@ function alphabetInfoFromPositions(pos){
 }
 
 // ===== Vigenère =====
-function solveCribVigenere(cipherSeg, plainSeg, keylen, letterStartPos){
+function solveCribVigenere(cipherSeg, plainSeg, keylen, letterStartPos, algorithm){
   const tpl = Array(keylen).fill(null);
+  const mod = (x)=>((x%26)+26)%26;
+  const algo = normalizeVariantAlgo(algorithm);
+  const ops = variantOpsFor(algo);
+  const keyFromPlainCipher = (p, c) => mod(ops.keyFromPlainCipher(p, c));
   for (let t=0; t < cipherSeg.length; t++){
     const c = A2I[cipherSeg[t]];
     const p = A2I[plainSeg[t]];
     const kpos = (letterStartPos + t) % keylen;
-    const need = ((c - p) % 26 + 26) % 26;
+    const need = keyFromPlainCipher(p, c);
     if (tpl[kpos] === null) tpl[kpos] = need;
     else if (tpl[kpos] !== need) return { ok:false, template:null };
   }
   return { ok:true, template: tpl };
 }
 
-function applyVigenereDecrypt(letters, template){
+function applyVigenereDecrypt(letters, template, algorithm){
   const keylen = template.length;
   let out = '';
   let step = 0;
+  const mod = (x)=>((x%26)+26)%26;
+  const algo = normalizeVariantAlgo(algorithm);
+  const ops = variantOpsFor(algo);
+  const plainFromCipherKey = (c, k) => mod(ops.plainFromCipherKey(c, k));
   for (let i=0; i < letters.length; i++){
     const ch = letters[i];
     if (!isLetter(ch)){
@@ -548,7 +556,7 @@ function applyVigenereDecrypt(letters, template){
     const kv = template[step % keylen];
     let pCh = '?';
     if (kv !== null){
-      const p = ((c - kv) % 26 + 26) % 26;
+      const p = plainFromCipherKey(c, mod(kv));
       pCh = A[p];
     }
     out += pCh;
@@ -779,12 +787,14 @@ function testCribs(){
     return;
   }
 
-  const selectedVigAlgoRaw = (op === 'vig_custom_alpha' || op === 'vig_sub') ? currentVigAlgo() : null;
+  const selectedVigAlgoRaw = (op === 'vig_custom_alpha' || op === 'vig_sub' || op === 'vigenere') ? currentVigAlgo() : null;
   const selectedVigAlgo = selectedVigAlgoRaw ? normalizeVariantAlgo(selectedVigAlgoRaw) : null;
-  const variantSuffix = op === 'vig_sub' ? ` (${variantAlgoLabel(selectedVigAlgo || 'vigenere')})` : '';
+  const variantSuffix = (op === 'vig_sub' || op === 'vigenere') ? ` (${variantAlgoLabel(selectedVigAlgo || 'vigenere')})` : '';
   summary.textContent = `Testing ${segments.length} crib segment(s) for key lengths ${minK}..${maxK} using ${op}${variantSuffix}`;
 
   if (op === 'vigenere'){
+    const algorithm = normalizeVariantAlgo(selectedVigAlgo || 'vigenere');
+    const variantLabel = variantAlgoLabel(algorithm);
     const {cLetters} = buildLetterStreams(letters);
     const good = [];
     for (let k = minK; k <= maxK; k++){
@@ -793,7 +803,7 @@ function testCribs(){
       for (const seg of segments){
         const {absToLetterStep} = buildLetterStreams(letters);
         const letterStartPos = absToLetterStep[seg.start];
-        const res = solveCribVigenere(seg.cipherSeg, seg.plainSeg, k, letterStartPos);
+        const res = solveCribVigenere(seg.cipherSeg, seg.plainSeg, k, letterStartPos, algorithm);
         if (!res.ok){ okAll = false; break; }
         for (let i=0;i<k;i++){
           const v = res.template[i];
@@ -809,10 +819,10 @@ function testCribs(){
     let text = '';
     for (const g of good){
       const tpl = g.template.map(x => x===null ? '?' : A[x]).join('');
-      text += 'Key length: ' + g.k + ' (Vigenère)\n';
+      text += 'Key length: ' + g.k + ' (' + variantLabel + ')\n';
       text += 'Key template: ' + tpl + '\n';
       text += 'Partial decrypt:\n';
-      text += applyVigenereDecrypt(letters, g.template) + '\n\n';
+      text += applyVigenereDecrypt(letters, g.template, algorithm) + '\n\n';
     }
     out.textContent = text;
     return;
@@ -962,7 +972,7 @@ function bruteForceWordlist(){
     const maxK = parseInt(document.getElementById('maxK').value, 10);
     const op = document.getElementById('op').value;
     const selectedAutokeyAlgo = op === 'autokey_custom_alpha' ? currentAutokeyAlgo() : null;
-    const selectedVigAlgoRaw = (op === 'vig_custom_alpha' || op === 'vig_sub') ? currentVigAlgo() : null;
+    const selectedVigAlgoRaw = (op === 'vig_custom_alpha' || op === 'vig_sub' || op === 'vigenere') ? currentVigAlgo() : null;
     const selectedVigAlgo = selectedVigAlgoRaw ? normalizeVariantAlgo(selectedVigAlgoRaw) : null;
   const quickTrials = getQuickTrials();
   const trialDepth = getTrialDepth();
@@ -2024,7 +2034,7 @@ try{
 
     function updateVariantSelectors(){
       const op = SEL_OP ? SEL_OP.value : '';
-      const showVig = op === 'vig_custom_alpha' || op === 'vig_sub';
+      const showVig = op === 'vig_custom_alpha' || op === 'vig_sub' || op === 'vigenere';
       const showAutokey = op === 'autokey_custom_alpha';
       if (SEL_VIG_ALGO){
         SEL_VIG_ALGO.style.display = showVig ? '' : 'none';
@@ -2630,22 +2640,30 @@ try{
           }
           return out;
         }
-        function solveCribVigenere(cipherSeg, plainSeg, keylen, letterStartPos){
+        function solveCribVigenere(cipherSeg, plainSeg, keylen, letterStartPos, algorithm){
           const tpl = Array(keylen).fill(null);
+          const mod = (x)=>((x%26)+26)%26;
+          const algo = normalizeVariantAlgo(algorithm);
+          const ops = variantOpsFor(algo);
+          const keyFromPlainCipher = (p, c) => mod(ops.keyFromPlainCipher(p, c));
           for (let t=0; t<cipherSeg.length; t++){
             const c = A2I[cipherSeg[t]];
             const p = A2I[plainSeg[t]];
             const kpos = (letterStartPos + t) % keylen;
-            const need = ((c - p) % 26 + 26) % 26;
+            const need = keyFromPlainCipher(p, c);
             if (tpl[kpos] === null) tpl[kpos] = need;
             else if (tpl[kpos] !== need) return { ok:false, template:null };
           }
           return { ok:true, template: tpl };
         }
-        function applyVigenereDecrypt(letters, template){
+        function applyVigenereDecrypt(letters, template, algorithm){
           const keylen = template.length;
           let out = '';
           let step = 0;
+          const mod = (x)=>((x%26)+26)%26;
+          const algo = normalizeVariantAlgo(algorithm);
+          const ops = variantOpsFor(algo);
+          const plainFromCipherKey = (c, k) => mod(ops.plainFromCipherKey(c, k));
           for (let i=0; i<letters.length; i++){
             const ch = letters[i];
             if (!isLetter(ch)){ out += ch; continue; }
@@ -2653,7 +2671,7 @@ try{
             const kv = template[step % keylen];
             let pCh = '?';
             if (kv !== null){
-              const p = ((c - kv) % 26 + 26) % 26;
+              const p = plainFromCipherKey(c, mod(kv));
               pCh = A[p];
             }
             out += pCh;
@@ -3002,9 +3020,10 @@ try{
                 }
               }
             } else {
+              const algorithm = normalizeVariantAlgo(vigAlgo || 'vigenere');
               for (let k=minKVal; k<=maxKVal && !__cancelled; k++){
                 if (op === 'vigenere'){
-                  const res = solveCribVigenere(cipherSeg, word, k, startPos);
+                  const res = solveCribVigenere(cipherSeg, word, k, startPos, algorithm);
                   if (!res.ok) continue;
                   let consistent = true;
                   for (const existing of existingCribs){
@@ -3016,12 +3035,12 @@ try{
                       }
                     }
                     if (letterIdx >= 0){
-                      const check = solveCribVigenere(existing.cipherSeg, existing.plainSeg, k, letterIdx);
+                      const check = solveCribVigenere(existing.cipherSeg, existing.plainSeg, k, letterIdx, algorithm);
                       if (!check.ok){ consistent = false; break; }
                     }
                   }
                   if (!consistent) continue;
-                  const decrypted = applyVigenereDecrypt(letters, res.template);
+                  const decrypted = applyVigenereDecrypt(letters, res.template, algorithm);
                   if (enforceNext && nextSegmentLen > 0 && !matchesNextSegment(decrypted, nextSegment)) continue;
                   const decLetters = sanitize(decrypted).split('');
                   const fitness = englishFitness(decLetters);
@@ -3031,7 +3050,8 @@ try{
                     key: res.template.map(x => x===null ? '?' : A[x]).join(''),
                     decrypted,
                     fitness,
-                    op: 'vigenere'
+                    op: 'vigenere',
+                    vigAlgo: algorithm
                   });
                 } else if (op === 'vig_sub' || op === 'vig_sub_post'){
                   const constraints = [];
@@ -3452,7 +3472,9 @@ try{
         totalWords,
         bridgeNext: !!payload.bridgeNext,
         autokeyAlgo: payload.op === 'autokey_custom_alpha' ? normalizeVariantAlgo(payload.autokeyAlgo) : null,
-        vigAlgo: payload.op === 'vig_custom_alpha' ? normalizeVariantAlgo(payload.vigAlgo) : null
+        vigAlgo: (payload.op === 'vig_custom_alpha' || payload.op === 'vig_sub' || payload.op === 'vigenere')
+          ? normalizeVariantAlgo(payload.vigAlgo)
+          : null
       };
 
       if (BTN_BRUTE) BTN_BRUTE.disabled = true;
@@ -3470,7 +3492,7 @@ try{
         if (payload.op === 'autokey_custom_alpha'){
           const variantLabel = variantAlgoLabel(normalizeVariantAlgo(payload.autokeyAlgo));
           text += ` Autokey variant: ${variantLabel}.`;
-        } else if (payload.op === 'vig_custom_alpha'){
+        } else if (payload.op === 'vig_custom_alpha' || payload.op === 'vig_sub' || payload.op === 'vigenere'){
           const variantLabel = variantAlgoLabel(normalizeVariantAlgo(payload.vigAlgo));
           text += ` Variant: ${variantLabel}.`;
         }
