@@ -2493,10 +2493,14 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
           if (msg && msg.cmd === 'start'){
             __cancelled = false;
             __candsFound = 0;
-                  const letters = msg.letters || [];
-            const cribMap = {}; for (const pair of (msg.cribPairs||[])){ if (pair && pair.length >= 2) cribMap[pair[0]] = pair[1]; }
+            const letters = Array.isArray(msg.letters) ? msg.letters : [];
+            const cribMap = {};
+            for (const pair of (msg.cribPairs||[])){
+              if (pair && pair.length >= 2) cribMap[pair[0]] = pair[1];
+            }
             const minK = msg.minK|0, maxK = msg.maxK|0;
             const autokeyAlgo = normalizeAutokeyAlgo(msg.autokeyAlgo);
+            const op = (typeof msg.op === 'string' && msg.op) ? msg.op : 'autokey_custom_alpha';
             const total = Math.max(1, maxK - minK + 1);
             postMessage({ kind:'progress', done:0, total, label:'m='+minK, candidatesFound: __candsFound });
             const results=[];
@@ -2510,22 +2514,20 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
                 const keyResidues = sol.k.map(v=>String.fromCharCode(65+v)).join('');
                 const actualKey = sol.k.map(v => alphaInfo.inv[v] || '?').join('');
                 const cand = {
-                    keyLength:m,
-                    key: keyResidues,
-                    actualKey,
-                    alphabet: alphaInfo.invString,
-                    posRaw: sol.pos,
-                    kRaw: sol.k,
-                    score: fit,
-                    preview: dec.slice(0,200),
-                    full: dec,
-                    autokeyAlgo
-                  };
+                  keyLength:m,
+                  key: keyResidues,
+                  actualKey,
+                  alphabet: alphaInfo.invString,
+                  posRaw: sol.pos,
+                  kRaw: sol.k,
+                  score: fit,
+                  preview: dec.slice(0,200),
+                  full: dec,
+                  autokeyAlgo
+                };
                 results.push(cand);
                 postMessage({ kind:'candidate', ...cand });
-                }
               }
-
               postMessage({ kind:'progress', done:(m - minK + 1), total, label:'m='+m, candidatesFound: __candsFound });
             }
             if (__cancelled){
