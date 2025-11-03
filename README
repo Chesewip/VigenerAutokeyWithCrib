@@ -1,6 +1,6 @@
 # Cipher Crib Tester
 
-This project hosts a single-page tool for experimenting with Vigenère-family ciphers. Paste a ciphertext, pin plaintext cribs under specific columns, and either test your assignments directly or run a wordlist-driven brute force to explore candidate words.
+This project hosts a single-page tool dedicated to cracking autokey ciphers that use an unknown mixed alphabet. Paste a ciphertext, pin plaintext cribs under specific columns, and either test your assignments directly or run a wordlist-driven brute force to explore candidate words.
 
 ## Autokey + unknown alphabet brute-forcer performance
 
