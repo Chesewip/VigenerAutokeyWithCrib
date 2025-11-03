@@ -1254,6 +1254,14 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options, algo){
       constraints.push({ type:'feed', idx:step, pSym, cSym, depSym });
       letterDeg[depSym]++;
     }
+    const nextStep = step + m;
+    if (stepPlain.has(nextStep) && stepCipher.has(nextStep)){
+      const nextSym = stepPlain.get(nextStep);
+      const nextCipherSym = stepCipher.get(nextStep);
+      constraints.push({ type:'backfeed', idx:step, pSym, nextSym, nextCipherSym });
+      letterDeg[nextSym]++;
+      letterDeg[nextCipherSym]++;
+    }
     letterDeg[pSym]++;
     letterDeg[cSym]++;
   }
@@ -1317,7 +1325,7 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options, algo){
             if (!res.ok) return false;
             if (res.changed) changed = true;
           }
-        } else {
+        } else if (cons.type === 'feed'){
           const a = pos[cons.pSym];
           const b = pos[cons.cSym];
           const dep = pos[cons.depSym];
@@ -1336,6 +1344,28 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options, algo){
           }
           if (bNow !== null && depNow !== null){
             const res = assignLetter(cons.pSym, plainFromCipherKey(bNow, depNow));
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+        } else {
+          const base = pos[cons.pSym];
+          const nextPlain = pos[cons.nextSym];
+          const nextCipher = pos[cons.nextCipherSym];
+          if (nextPlain !== null && base !== null){
+            const res = assignLetter(cons.nextCipherSym, cipherFromPlainKey(nextPlain, base));
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+          const nextCipherNow = pos[cons.nextCipherSym];
+          const baseNow = pos[cons.pSym];
+          const nextPlainNow = pos[cons.nextSym];
+          if (nextCipherNow !== null && nextPlainNow !== null){
+            const res = assignLetter(cons.pSym, keyFromPlainCipher(nextPlainNow, nextCipherNow));
+            if (!res.ok) return false;
+            if (res.changed) changed = true;
+          }
+          if (nextCipherNow !== null && baseNow !== null){
+            const res = assignLetter(cons.nextSym, plainFromCipherKey(nextCipherNow, baseNow));
             if (!res.ok) return false;
             if (res.changed) changed = true;
           }
@@ -1389,37 +1419,51 @@ function solveAutokeyUnknownAlphabet(letters, cribMap, m, options, algo){
       const keyFull = keyInit.slice().map(x => x===null ? 0 : mod(x));
       return { pos: posFull, k: keyFull };
     }
-    if (sel.type === 'letter'){
-      const candSet = new Set();
-      for (const cons of constraints){
-        if (cons.pSym === sel.idx){
-          if (cons.type === 'init'){
-            const b = pos[cons.cSym];
-            const keyVal = keyInit[cons.idx];
-            if (b !== null && keyVal !== null) candSet.add(plainFromCipherKey(b, keyVal));
-          } else {
-            const b = pos[cons.cSym];
-            const dep = pos[cons.depSym];
-            if (b !== null && dep !== null) candSet.add(plainFromCipherKey(b, dep));
-          }
-        }
-        if (cons.cSym === sel.idx){
-          if (cons.type === 'init'){
-            const a = pos[cons.pSym];
-            const keyVal = keyInit[cons.idx];
-            if (a !== null && keyVal !== null) candSet.add(cipherFromPlainKey(a, keyVal));
-          } else {
-            const a = pos[cons.pSym];
-            const dep = pos[cons.depSym];
-            if (a !== null && dep !== null) candSet.add(cipherFromPlainKey(a, dep));
-          }
-        }
-        if (cons.type === 'feed' && cons.depSym === sel.idx){
-          const a = pos[cons.pSym];
-          const b = pos[cons.cSym];
-          if (b !== null && a !== null) candSet.add(keyFromPlainCipher(a, b));
-        }
-      }
+              if (sel.type === 'letter'){
+                const candSet = new Set();
+                for (const cons of constraints){
+                  if (cons.pSym === sel.idx){
+                    if (cons.type === 'init'){
+                      const b = pos[cons.cSym];
+                      const keyVal = keyInit[cons.idx];
+                      if (b !== null && keyVal !== null) candSet.add(plainFromCipherKey(b, keyVal));
+                    } else if (cons.type === 'feed'){
+                      const b = pos[cons.cSym];
+                      const dep = pos[cons.depSym];
+                      if (b !== null && dep !== null) candSet.add(plainFromCipherKey(b, dep));
+                    } else if (cons.type === 'backfeed'){
+                      const nextPlain = pos[cons.nextSym];
+                      const nextCipher = pos[cons.nextCipherSym];
+                      if (nextPlain !== null && nextCipher !== null) candSet.add(keyFromPlainCipher(nextPlain, nextCipher));
+                    }
+                  }
+                  if (cons.cSym === sel.idx){
+                    if (cons.type === 'init'){
+                      const a = pos[cons.pSym];
+                      const keyVal = keyInit[cons.idx];
+                      if (a !== null && keyVal !== null) candSet.add(cipherFromPlainKey(a, keyVal));
+                    } else if (cons.type === 'feed'){
+                      const a = pos[cons.pSym];
+                      const dep = pos[cons.depSym];
+                      if (a !== null && dep !== null) candSet.add(cipherFromPlainKey(a, dep));
+                    }
+                  }
+                  if (cons.type === 'feed' && cons.depSym === sel.idx){
+                    const a = pos[cons.pSym];
+                    const b = pos[cons.cSym];
+                    if (b !== null && a !== null) candSet.add(keyFromPlainCipher(a, b));
+                  }
+                  if (cons.type === 'backfeed' && cons.nextSym === sel.idx){
+                    const nextCipher = pos[cons.nextCipherSym];
+                    const base = pos[cons.pSym];
+                    if (nextCipher !== null && base !== null) candSet.add(plainFromCipherKey(nextCipher, base));
+                  }
+                  if (cons.type === 'backfeed' && cons.nextCipherSym === sel.idx){
+                    const nextPlain = pos[cons.nextSym];
+                    const base = pos[cons.pSym];
+                    if (nextPlain !== null && base !== null) candSet.add(cipherFromPlainKey(nextPlain, base));
+                  }
+                }
       const free = [];
       for (let v=0; v<N; v++){ if (!used[v]) free.push(v); }
       const candidates = candSet.size ? Array.from(candSet).filter(v => !used[v]) : free;
@@ -1515,7 +1559,7 @@ function decryptAutokeyUnknownAlphabet(letters, pos, keyInit, algo){
 
 function autokeyCoverageDiagnostics(letters, cribMap, m){
   const segments = collectContiguousCribs(letters, cribMap);
-  const { absToLetterStep } = buildLetterStreams(letters);
+  const { absToLetterStep, cLetters } = buildLetterStreams(letters);
   const stepPlain = new Map();
   const stepCipher = new Map();
   for (const seg of segments){
@@ -1530,16 +1574,29 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
     }
   }
   const residues = Array.from({length:m}, ()=>0);
-  const missing = [];
+  const missingForward = [];
+  const missingBackward = [];
   let feedLinks = 0;
+  let backfeedLinks = 0;
+  let coveredBackfeed = 0;
   const steps = Array.from(stepPlain.keys()).sort((a,b)=>a-b);
+  const totalLetterSteps = Array.isArray(cLetters) ? cLetters.length : 0;
   for (const step of steps){
     residues[step % m]++;
     const dep = step - m;
     if (dep >= 0){
       feedLinks++;
       if (!stepPlain.has(dep)){
-        missing.push({ step, dependsOn: dep });
+        missingForward.push({ step, dependsOn: dep });
+      }
+    }
+    const next = step + m;
+    if (next < totalLetterSteps){
+      backfeedLinks++;
+      if (stepPlain.has(next)){
+        coveredBackfeed++;
+      } else {
+        missingBackward.push({ step, dependsOn: next });
       }
     }
   }
@@ -1547,7 +1604,10 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
     totalSteps: stepPlain.size,
     residues,
     feedLinks,
-    missingFeed: missing
+    missingFeed: missingForward,
+    backfeedLinks,
+    coveredBackfeed,
+    missingBackfeed: missingBackward
   };
 }
 
@@ -1913,19 +1973,27 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
             const pSym = stepPlain.get(step);
             const cSym = stepCipher.get(step);
             if (pSym == null || cSym == null) continue;
-            if (step < m){
-              constraints.push({ type:'init', idx:step, pSym, cSym });
-              keyDeg[step]++;
-            }
-            const depStep = step - m;
-            if (depStep >= 0 && stepPlain.has(depStep)){
-              const depSym = stepPlain.get(depStep);
-              constraints.push({ type:'feed', idx:step, pSym, cSym, depSym });
-              letterDeg[depSym]++;
-            }
-            letterDeg[pSym]++;
-            letterDeg[cSym]++;
+          if (step < m){
+            constraints.push({ type:'init', idx:step, pSym, cSym });
+            keyDeg[step]++;
           }
+          const depStep = step - m;
+          if (depStep >= 0 && stepPlain.has(depStep)){
+            const depSym = stepPlain.get(depStep);
+            constraints.push({ type:'feed', idx:step, pSym, cSym, depSym });
+            letterDeg[depSym]++;
+          }
+          const nextStep = step + m;
+          if (stepPlain.has(nextStep) && stepCipher.has(nextStep)){
+            const nextSym = stepPlain.get(nextStep);
+            const nextCipherSym = stepCipher.get(nextStep);
+            constraints.push({ type:'backfeed', idx:step, pSym, nextSym, nextCipherSym });
+            letterDeg[nextSym]++;
+            letterDeg[nextCipherSym]++;
+          }
+          letterDeg[pSym]++;
+          letterDeg[cSym]++;
+        }
           if (!constraints.length) return null;
         
           const pos = new Array(N).fill(null);
@@ -1986,7 +2054,7 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
                     if (!res.ok) return false;
                     if (res.changed) changed = true;
                   }
-                } else {
+                } else if (cons.type === 'feed'){
                   const a = pos[cons.pSym];
                   const b = pos[cons.cSym];
                   const dep = pos[cons.depSym];
@@ -2005,6 +2073,28 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
                   }
                   if (bNow !== null && depNow !== null){
                     const res = assignLetter(cons.pSym, plainFromCipherKey(bNow, depNow));
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                } else {
+                  const base = pos[cons.pSym];
+                  const nextPlain = pos[cons.nextSym];
+                  const nextCipher = pos[cons.nextCipherSym];
+                  if (nextPlain !== null && base !== null){
+                    const res = assignLetter(cons.nextCipherSym, cipherFromPlainKey(nextPlain, base));
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                  const nextCipherNow = pos[cons.nextCipherSym];
+                  const baseNow = pos[cons.pSym];
+                  const nextPlainNow = pos[cons.nextSym];
+                  if (nextCipherNow !== null && nextPlainNow !== null){
+                    const res = assignLetter(cons.pSym, keyFromPlainCipher(nextPlainNow, nextCipherNow));
+                    if (!res.ok) return false;
+                    if (res.changed) changed = true;
+                  }
+                  if (nextCipherNow !== null && baseNow !== null){
+                    const res = assignLetter(cons.nextSym, plainFromCipherKey(nextCipherNow, baseNow));
                     if (!res.ok) return false;
                     if (res.changed) changed = true;
                   }
@@ -2062,33 +2152,47 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
               const candSet = new Set();
               for (const cons of constraints){
                 if (cons.pSym === sel.idx){
-                  if (cons.type === 'init'){
-                    const b = pos[cons.cSym];
-                    const keyVal = keyInit[cons.idx];
-                    if (b !== null && keyVal !== null) candSet.add(plainFromCipherKey(b, keyVal));
-                  } else {
-                    const b = pos[cons.cSym];
-                    const dep = pos[cons.depSym];
-                    if (b !== null && dep !== null) candSet.add(plainFromCipherKey(b, dep));
-                  }
-                }
-                if (cons.cSym === sel.idx){
-                  if (cons.type === 'init'){
-                    const a = pos[cons.pSym];
-                    const keyVal = keyInit[cons.idx];
-                    if (a !== null && keyVal !== null) candSet.add(cipherFromPlainKey(a, keyVal));
-                  } else {
-                    const a = pos[cons.pSym];
-                    const dep = pos[cons.depSym];
-                    if (a !== null && dep !== null) candSet.add(cipherFromPlainKey(a, dep));
-                  }
-                }
-                if (cons.type === 'feed' && cons.depSym === sel.idx){
-                  const a = pos[cons.pSym];
-                  const b = pos[cons.cSym];
-                  if (b !== null && a !== null) candSet.add(keyFromPlainCipher(a, b));
-                }
+              if (cons.type === 'init'){
+                const b = pos[cons.cSym];
+                const keyVal = keyInit[cons.idx];
+                if (b !== null && keyVal !== null) candSet.add(plainFromCipherKey(b, keyVal));
+              } else if (cons.type === 'feed'){
+                const b = pos[cons.cSym];
+                const dep = pos[cons.depSym];
+                if (b !== null && dep !== null) candSet.add(plainFromCipherKey(b, dep));
+              } else if (cons.type === 'backfeed'){
+                const nextPlain = pos[cons.nextSym];
+                const nextCipher = pos[cons.nextCipherSym];
+                if (nextPlain !== null && nextCipher !== null) candSet.add(keyFromPlainCipher(nextPlain, nextCipher));
               }
+            }
+            if (cons.cSym === sel.idx){
+              if (cons.type === 'init'){
+                const a = pos[cons.pSym];
+                const keyVal = keyInit[cons.idx];
+                if (a !== null && keyVal !== null) candSet.add(cipherFromPlainKey(a, keyVal));
+              } else if (cons.type === 'feed'){
+                const a = pos[cons.pSym];
+                const dep = pos[cons.depSym];
+                if (a !== null && dep !== null) candSet.add(cipherFromPlainKey(a, dep));
+              }
+            }
+            if (cons.type === 'feed' && cons.depSym === sel.idx){
+              const a = pos[cons.pSym];
+              const b = pos[cons.cSym];
+              if (b !== null && a !== null) candSet.add(keyFromPlainCipher(a, b));
+            }
+            if (cons.type === 'backfeed' && cons.nextSym === sel.idx){
+              const nextCipher = pos[cons.nextCipherSym];
+              const base = pos[cons.pSym];
+              if (nextCipher !== null && base !== null) candSet.add(plainFromCipherKey(nextCipher, base));
+            }
+            if (cons.type === 'backfeed' && cons.nextCipherSym === sel.idx){
+              const nextPlain = pos[cons.nextSym];
+              const base = pos[cons.pSym];
+              if (nextPlain !== null && base !== null) candSet.add(cipherFromPlainKey(nextPlain, base));
+            }
+          }
               const free = [];
               for (let v=0; v<N; v++){ if (!used[v]) free.push(v); }
               const candidates = candSet.size ? Array.from(candSet).filter(v => !used[v]) : free;
@@ -2676,11 +2780,17 @@ function autokeyCoverageDiagnostics(letters, cribMap, m){
                 const cov = autokeyCoverageDiagnostics(letters, cribMap, m);
                 if (!cov) continue;
                 const residues = (cov.residues || []).map((cnt, idx)=>`${idx}:${cnt}`).join(', ');
-                detailLines.push(`m=${m}: crib steps=${cov.totalSteps}, feed links=${cov.feedLinks}, missing feed=${cov.missingFeed.length}, residues {${residues}}`);
+                detailLines.push(`m=${m}: crib steps=${cov.totalSteps}, forward links=${cov.feedLinks} (missing ${cov.missingFeed.length}), backward links=${cov.backfeedLinks} (covered ${cov.coveredBackfeed}, missing ${cov.missingBackfeed.length}), residues {${residues}}`);
                 if (cov.missingFeed.length){
                   const sample = cov.missingFeed.slice(0,5).map(({step, dependsOn})=>`(${step}<-${dependsOn})`).join(' ');
                   if (sample){
                     detailLines.push(`  uncovered autokey links: ${sample}${cov.missingFeed.length>5?' …':''}`);
+                  }
+                }
+                if (cov.missingBackfeed.length){
+                  const sampleBack = cov.missingBackfeed.slice(0,5).map(({step, dependsOn})=>`(${step}->${dependsOn})`).join(' ');
+                  if (sampleBack){
+                    detailLines.push(`  missing backward bridges: ${sampleBack}${cov.missingBackfeed.length>5?' …':''}`);
                   }
                 }
               }
